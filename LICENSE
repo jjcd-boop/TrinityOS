@@ -1,0 +1,109 @@
+Trinity OS Noncommercial Source License 1.0
+
+Copyright (c) 2026 James Davis. All rights reserved except as expressly granted by this License.
+
+IMPORTANT: Trinity OS is source-available software, not open-source software under an OSI-approved license. Third-party materials remain governed by their own licenses and are not relicensed by this License.
+
+1. Definitions
+
+“Trinity” means the Trinity OS software, source code, object code, documentation, artwork, interfaces, build materials, and other copyrightable material distributed with this License, excluding Third-Party Materials.
+
+“Copyright Owner” means James Davis and, after any lawful transfer, his lawful successors and assigns.
+
+“Noncommercial Purpose” means use that is not primarily intended for or directed toward commercial advantage, monetary compensation, revenue generation, paid services, sale, licensing for a fee, or other direct or indirect financial benefit.
+
+“Derivative Work” means a work based upon or incorporating Trinity to the extent recognized by applicable copyright law.
+
+“Third-Party Materials” means software, firmware, fonts, images, data, libraries, reference-derived material, or other content owned by parties other than the Copyright Owner and identified by notice, provenance, or applicable law.
+
+2. Ownership
+
+Trinity and all original Trinity material authored by or validly assigned to the Copyright Owner remain the exclusive property of the Copyright Owner. No ownership interest is transferred by this License.
+
+Except for rights expressly granted below, all rights are reserved.
+
+3. Noncommercial License Grant
+
+Subject to continuous compliance with this License, the Copyright Owner grants you a worldwide, royalty-free, nonexclusive, nontransferable except as permitted by Section 5, license to:
+
+(a) run Trinity for personal, educational, research, evaluation, archival, hobbyist, and other Noncommercial Purposes;
+(b) inspect and study the source code;
+(c) make and use modifications for Noncommercial Purposes; and
+(d) make copies reasonably necessary for those permitted purposes.
+
+4. Contributions
+
+You may prepare and submit proposed contributions to the official Trinity project. Submission alone does not transfer ownership and does not guarantee acceptance.
+
+A contribution may be incorporated into the official Trinity project only after the contributor has executed the then-current Trinity Contributor Copyright Assignment Agreement or another written agreement expressly approved by the Copyright Owner.
+
+Until a contribution is accepted under such an agreement, the contributor retains whatever rights the contributor otherwise holds in that contribution.
+
+5. Noncommercial Redistribution
+
+You may redistribute Trinity or a Derivative Work only if all of the following conditions are met:
+
+(a) no fee, sale price, subscription charge, mandatory donation, advertising consideration, bundled commercial consideration, or other monetary compensation is required or received for the copy, access, or distribution;
+(b) the redistribution is solely for Noncommercial Purposes;
+(c) this License, the COPYRIGHT file, the NOTICE file, the TRADEMARKS file, and all applicable Third-Party notices are included intact;
+(d) copyright, attribution, provenance, and license notices are not removed, obscured, or misrepresented;
+(e) modified versions are clearly identified as modified and must not be represented as an official release of Trinity;
+(f) the recipient receives no fewer restrictions than those imposed by this License on Trinity-covered material; and
+(g) you do not claim ownership of Trinity-covered material that you did not author.
+
+6. Commercial Use Prohibited
+
+Without a separate written license from the Copyright Owner, you may not use Trinity or a Derivative Work for a Commercial Purpose. Prohibited activity includes, without limitation:
+
+(a) selling or licensing Trinity or a Derivative Work for a fee;
+(b) charging for access, copies, distribution, hosting, support, integration, or services where Trinity is a material part of what is being sold;
+(c) bundling Trinity with a paid product or service for commercial advantage;
+(d) using Trinity as a material component of a revenue-generating product, appliance, service, hosted offering, or commercial platform;
+(e) sublicensing Trinity for commercial use; or
+(f) monetizing Trinity through advertising, access fees, transaction fees, mandatory donations, sponsorship consideration tied to access, or substantially similar arrangements.
+
+Incidental reimbursement of actual, documented media or shipping cost, without markup or profit, is not commercial use if no other compensation or commercial advantage is received.
+
+7. No Relicensing by Recipients
+
+You may not relicense Trinity-covered material, remove this License, or impose terms that purport to replace or supersede this License.
+
+Only the Copyright Owner may issue Trinity under a different license, grant commercial exceptions, or publish a revised Trinity license for future distributions. A revised license does not retroactively alter rights already granted under an earlier version unless the parties expressly agree otherwise in writing.
+
+8. Attribution and Integrity
+
+Redistributions and public Derivative Works must prominently state that they are based on Trinity OS originally developed by James Davis. Modified versions must identify themselves as unofficial unless expressly authorized in writing by the Copyright Owner.
+
+9. Trademarks and Branding
+
+This License grants no trademark, service mark, trade name, logo, or branding rights. You may use “Trinity OS” only as reasonably necessary to make truthful, non-misleading statements describing origin, compatibility, or derivation. You may not imply endorsement, sponsorship, or official status. See TRADEMARKS.
+
+10. Third-Party Materials
+
+This License does not grant rights that the Copyright Owner does not possess. Third-Party Materials remain governed by their respective licenses, notices, and terms. If a Third-Party license grants broader rights than this License, those broader rights apply only to that Third-Party Material, not to Trinity-covered material as a whole. See THIRD_PARTY_NOTICES.md.
+
+11. No Patent License Except as Expressly Granted
+
+No patent rights are granted by implication, estoppel, or otherwise except to the extent a separate written agreement expressly provides them.
+
+12. Compliance and Termination
+
+Your rights under this License terminate automatically upon material breach. If the breach is capable of cure and you fully cure it within thirty (30) days after receiving written notice from the Copyright Owner, the Copyright Owner may reinstate rights in writing. Continued use after termination is not authorized.
+
+13. No Warranty
+
+TRINITY IS PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, SECURITY, RELIABILITY, OR ERROR-FREE OPERATION, TO THE MAXIMUM EXTENT PERMITTED BY LAW.
+
+14. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT OWNER AND CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS, REVENUE, GOODWILL, OR BUSINESS INTERRUPTION, ARISING FROM OR RELATED TO TRINITY OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+15. Severability
+
+If any provision of this License is held unenforceable, that provision shall be enforced to the maximum extent permitted, and the remaining provisions remain in effect.
+
+16. Entire Permission
+
+This License states the permissions granted by the Copyright Owner for Trinity-covered material unless a separate written agreement signed by the Copyright Owner expressly provides otherwise.
+
+Version 1.0 — October 2026
