@@ -1,0 +1,201 @@
+--- nucleus_p1_base/include/trinity/nucleus.hpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/include/trinity/nucleus.hpp	2026-10-08 05:36:35.190256009 +0000
+@@ -2,6 +2,7 @@
+ #include "base.hpp"
+ #include "arch.hpp"
+ #include "uefi.hpp"
++#include "nucleus_health.hpp"
+ 
+ namespace trinity::nucleus {
+ enum class SlotState : u8 { Empty, Staged, Running, Suspect, Failed, Promoted };
+--- nucleus_p1_base/include/trinity/syscall.hpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/include/trinity/syscall.hpp	2026-10-08 05:37:31.268965273 +0000
+@@ -13,6 +13,7 @@
+ #include "containment.hpp"
+ #include "power.hpp"
+ #include "storage/broker_protocol.hpp"
++#include "nucleus_health.hpp"
+ 
+ namespace trinity::syscall {
+ 
+@@ -83,6 +84,7 @@
+     PollFileWrite = 64,
+     ReadFileAsync = 65,
+     PollFileRead = 66,
++    GetNucleusHealth = 67,
+ };
+ 
+ static_assert(StorageOpenVault == storage::broker_protocol::kOpenVaultSyscall);
+@@ -92,7 +94,7 @@
+ static_assert(StorageClose == storage::broker_protocol::kCloseSyscall);
+ 
+ constexpr u64 FirstSyscall = DrawRect;
+-constexpr u64 LastSyscall = PollFileRead;
++constexpr u64 LastSyscall = GetNucleusHealth;
+ constexpr usize DispatchTableSize = static_cast<usize>(LastSyscall + 1u);
+ constexpr usize UserPageSize = 4096u;
+ 
+--- nucleus_p1_base/src/nucleus/nucleus.cpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/src/nucleus/nucleus.cpp	2026-10-08 05:37:20.786415814 +0000
+@@ -7482,7 +7482,15 @@
+ [[noreturn]] static void finish_ring3_boot(const uefi::ImageInfo& image, Journal& journal);
+ [[noreturn]] static void high_half_boot_resume(void* opaque);
+ 
+-void kernel_heartbeat(){ ++g_runtime_heartbeat_count; g_runtime_recovery.heartbeat(trinity_rdtsc()); }
++void kernel_heartbeat(){
++    ++g_runtime_heartbeat_count;
++    const u64 now=trinity_rdtsc();
++    g_runtime_recovery.heartbeat(now);
++    health_heartbeat_at(SubsystemId::Kernel,g_runtime_heartbeat_count,now);
++    // A second bounded evaluator path means scheduler diagnostics can still
++    // transition if timer-driven polling is delayed but syscalls continue.
++    if((g_runtime_heartbeat_count&127u)==0u)health_poll();
++}
+ u64 kernel_heartbeat_count(){ return g_runtime_heartbeat_count; }
+ 
+ 
+@@ -8375,6 +8383,9 @@
+ 
+     Journal& journal = g_boot_journal;
+     journal.initialize();
++    health_initialize();
++    health_register_pass1_defaults();
++    health_heartbeat(SubsystemId::Kernel,1u);
+     journal.record(JournalEvent::NucleusEntered, 0);
+     journal.record(JournalEvent::MemoryMapAcquired, map.map_size);
+     journal.record(JournalEvent::FirmwareExited, map.map_key);
+--- nucleus_p1_base/src/kernel/scheduler.cpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/src/kernel/scheduler.cpp	2026-10-08 05:37:20.785337239 +0000
+@@ -3,6 +3,7 @@
+ #include "trinity/process.hpp"
+ #include "trinity/mmu.hpp"
+ #include "trinity/platform.hpp"
++#include "trinity/nucleus_health.hpp"
+ 
+ namespace trinity::scheduler {
+ namespace {
+@@ -67,6 +68,7 @@
+ // Pass 14: monotonically increasing dispatch epoch used for bounded starvation
+ // aging. This avoids per-tick mutation of every Ready thread.
+ static std::atomic<u64> g_dispatch_epoch{1};
++static std::atomic<u64> g_nucleus_tick_progress{0};
+ 
+ static bool cpu_valid(u32 cpu) {
+     if (cpu >= g_cpu_count.load(std::memory_order_acquire) || cpu >= MaxCpus ||
+@@ -1353,6 +1355,13 @@
+ Thread* on_timer_tick(u32 cpu, Thread* current, bool quantum_expired) {
+     if (!quantum_expired) return current;
+ 
++    // Nucleus P1: timer dispatch is an independent forward-progress producer.
++    // CPU0 also performs a bounded periodic health evaluation so a stalled
++    // Desktop/compositor cannot prevent its own timeout from being observed.
++    const u64 health_tick = g_nucleus_tick_progress.fetch_add(1u, std::memory_order_acq_rel) + 1u;
++    nucleus::health_heartbeat(nucleus::SubsystemId::Scheduler, health_tick);
++    if (cpu == 0u && (health_tick & 63u) == 0u) nucleus::health_poll();
++
+     bool current_requeued = false;
+     if (current && current->state.load(std::memory_order_acquire) == static_cast<u8>(ThreadState::Running)) {
+         // The interrupt/switch path must have saved extended state before this
+--- nucleus_p1_base/src/kernel/gui_runtime.cpp	2026-10-08 05:18:36.000000000 +0000
++++ nucleus_p1/src/kernel/gui_runtime.cpp	2026-10-08 05:37:20.785592266 +0000
+@@ -13,6 +13,7 @@
+ #include "trinity/arch.hpp"
+ #include "trinity/usb.hpp"
+ #include "trinity/storage/fs_service_admission.hpp"
++#include "trinity/nucleus_health.hpp"
+ namespace trinity::gui {
+ namespace {
+ constexpr u16 LoaderCap=0xf0;
+@@ -46,6 +47,7 @@
+ // Pass 15 diagnostic counters are monotonic and lock-free. They never control
+ // scheduling or lifecycle behavior; a failed diagnostic read cannot block UI.
+ std::atomic<u64> diagnostic_sequence{0},app_crashes_total{0},compose_calls_total{0},compose_busy_total{0},compose_failed_total{0},surface_publish_busy_total{0};
++std::atomic<u64> nucleus_desktop_progress{0};
+ // Application Containment & Desktop Survivability counters. These never gate
+ // forward progress; they record local denial/retirement decisions only.
+ std::atomic<u64> containment_resource_denials{0},containment_watchdog_kills{0};
+@@ -625,6 +627,12 @@
+  }else if(shell()){
+   Slot& target=slots[m.app<SlotCount?m.app:Calculator];
+   if(m.operation==Operation::Service){
++   const u64 service_progress=nucleus_desktop_progress.fetch_add(1u,std::memory_order_acq_rel)+1u;
++   nucleus::health_heartbeat(nucleus::SubsystemId::Desktop,service_progress);
++   // Input and compositor are event-driven; the Desktop service loop proves
++   // their supervisory path is live even when the user is idle/no frame is due.
++   nucleus::health_heartbeat(nucleus::SubsystemId::Input,service_progress);
++   nucleus::health_heartbeat(nucleus::SubsystemId::Compositor,compose_calls_total.load(std::memory_order_acquire));
+    service_devices_periodic();
+    service_worker_timeout_watchdog();
+    service_app_containment_watchdog();
+@@ -671,7 +679,7 @@
+   else if(m.operation==Operation::WindowResize){i32 aw=0,ah=0;if(static_cast<State>(target.state.load(std::memory_order_acquire))!=State::Running)m.result=Result::NotReady;else if(resize_surface_pair(target,m.w,m.h,aw,ah)){m.w=aw;m.h=ah;m.result=Result::Ok;}else m.result=Result::Busy;}
+   else if(m.operation==Operation::WindowDestroy){const auto destroy_state=static_cast<State>(target.state.load(std::memory_order_acquire));target.close.store(1);target.close_tsc.store(trinity_rdtsc(),std::memory_order_release);u32 pending=LaunchQueued;if(target.launch_pending.compare_exchange_strong(pending,LaunchNone,std::memory_order_acq_rel,std::memory_order_acquire)||destroy_state==State::Empty||destroy_state==State::Failed){target.launch_phase.store(static_cast<u32>(LaunchPhase::None),std::memory_order_release);target.launch_detail.store(0,std::memory_order_release);target.error.store(static_cast<u32>(Error::None),std::memory_order_release);target.crashed.store(0,std::memory_order_release);target.close.store(0,std::memory_order_release);target.state.store(static_cast<u32>(State::Empty),std::memory_order_release);}else {target.state.store(static_cast<u32>(State::Closing),std::memory_order_release);scheduler::configure_budget(target.thread,scheduler::BudgetClass::Background,policy_quantum());}m.result=Result::Ok;}
+   else if(m.operation==Operation::Compose&&m.payload&&m.payload!=target.frames.load())m.result=Result::Stale;
+-  else if(m.operation==Operation::Compose){compose_calls_total.fetch_add(1,std::memory_order_relaxed);const auto target_state=static_cast<State>(target.state.load(std::memory_order_acquire));if(target_state!=State::Running||target.close.load(std::memory_order_acquire)||target.crashed.load(std::memory_order_acquire))m.result=Result::NotReady;else if(acquire(target.surface_lock)){const auto locked_state=static_cast<State>(target.state.load(std::memory_order_acquire));if(locked_state==State::Running&&!target.close.load(std::memory_order_acquire)&&!target.crashed.load(std::memory_order_acquire)&&(!m.payload||m.payload==target.frames.load(std::memory_order_acquire))&&target.frames.load(std::memory_order_acquire)&&target.physical[0]!=page_alloc::InvalidPage){const u32 front=target.front.load(std::memory_order_acquire);const u64 accepted_frame=target.frames.load(std::memory_order_acquire);target.readers[front].fetch_add(1,std::memory_order_acquire);target.last_composed_frame.store(accepted_frame,std::memory_order_release);release(target.surface_lock);const auto& fb=target.surfaces[front];graphics::SurfaceView32 view{fb.base,fb.width,fb.height,fb.pixels_per_scanline,graphics::SurfaceFormat32::Native};const u64 compose_begin=trinity_rdtsc();m.result=graphics::compose_surface_scaled(m.x,m.y,m.w,m.h,view)?Result::Ok:Result::Failed;if(m.result==Result::Ok)(void)graphics::scene_capture_rect(m.x,m.y,m.w,m.h);const u64 compose_end=trinity_rdtsc(),hz=platform::tsc_hz();if(hz&&compose_end>=compose_begin){const u64 us=((compose_end-compose_begin)*1000000ull)/hz;target.compose_time_us_last.store(us,std::memory_order_release);u64 peak=target.compose_time_us_peak.load(std::memory_order_relaxed);while(us>peak&&!target.compose_time_us_peak.compare_exchange_weak(peak,us,std::memory_order_relaxed,std::memory_order_relaxed)){} }if(m.result==Result::Failed)compose_failed_total.fetch_add(1,std::memory_order_relaxed);target.readers[front].fetch_sub(1,std::memory_order_release);}else{m.result=Result::NotReady;release(target.surface_lock);}}else{compose_busy_total.fetch_add(1,std::memory_order_relaxed);m.result=Result::Busy;}}
++  else if(m.operation==Operation::Compose){const u64 compose_progress=compose_calls_total.fetch_add(1,std::memory_order_acq_rel)+1u;nucleus::health_heartbeat(nucleus::SubsystemId::Compositor,compose_progress);const auto target_state=static_cast<State>(target.state.load(std::memory_order_acquire));if(target_state!=State::Running||target.close.load(std::memory_order_acquire)||target.crashed.load(std::memory_order_acquire))m.result=Result::NotReady;else if(acquire(target.surface_lock)){const auto locked_state=static_cast<State>(target.state.load(std::memory_order_acquire));if(locked_state==State::Running&&!target.close.load(std::memory_order_acquire)&&!target.crashed.load(std::memory_order_acquire)&&(!m.payload||m.payload==target.frames.load(std::memory_order_acquire))&&target.frames.load(std::memory_order_acquire)&&target.physical[0]!=page_alloc::InvalidPage){const u32 front=target.front.load(std::memory_order_acquire);const u64 accepted_frame=target.frames.load(std::memory_order_acquire);target.readers[front].fetch_add(1,std::memory_order_acquire);target.last_composed_frame.store(accepted_frame,std::memory_order_release);release(target.surface_lock);const auto& fb=target.surfaces[front];graphics::SurfaceView32 view{fb.base,fb.width,fb.height,fb.pixels_per_scanline,graphics::SurfaceFormat32::Native};const u64 compose_begin=trinity_rdtsc();m.result=graphics::compose_surface_scaled(m.x,m.y,m.w,m.h,view)?Result::Ok:Result::Failed;if(m.result==Result::Ok)(void)graphics::scene_capture_rect(m.x,m.y,m.w,m.h);const u64 compose_end=trinity_rdtsc(),hz=platform::tsc_hz();if(hz&&compose_end>=compose_begin){const u64 us=((compose_end-compose_begin)*1000000ull)/hz;target.compose_time_us_last.store(us,std::memory_order_release);u64 peak=target.compose_time_us_peak.load(std::memory_order_relaxed);while(us>peak&&!target.compose_time_us_peak.compare_exchange_weak(peak,us,std::memory_order_relaxed,std::memory_order_relaxed)){} }if(m.result==Result::Failed)compose_failed_total.fetch_add(1,std::memory_order_relaxed);target.readers[front].fetch_sub(1,std::memory_order_release);}else{m.result=Result::NotReady;release(target.surface_lock);}}else{compose_busy_total.fetch_add(1,std::memory_order_relaxed);m.result=Result::Busy;}}
+   else m.result=Result::Unsupported;
+  }
+  // R7 background admission: once CPU1 is executing any private task, use that
+--- nucleus_p1_base/src/kernel/syscall.cpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/src/kernel/syscall.cpp	2026-10-08 05:37:50.655844673 +0000
+@@ -500,6 +500,7 @@
+     // handler to the passive Comprehensive command only.  This does not grant
+     // Desktop FSCK/forensic/repair-plan authority.
+     if(number==GetFilesystemDiagnostic&&id==process::Id::Desktop)return true;
++    if(number==GetNucleusHealth)return id==process::Id::Desktop;
+     const u64 rights = containment::rights_for(id);
+     const u64 required = static_cast<u64>(coarse_capability_for(number));
+     return required != 0 && (rights & required) == required;
+@@ -1644,6 +1645,12 @@
+ static u64 handle_storage_flush(u64 argument,u64*){if(!storage_broker_principal())return 0;StorageSessionRequest request{};if(!read_object(argument,request))return 0;request.result=storage::broker::flush(request.session);request.reserved=0;return write_object(argument,request)&&request.result==storage::Result::Success?1u:0u;}
+ static u64 handle_storage_close(u64 argument,u64*){if(!storage_broker_principal())return 0;StorageSessionRequest request{};if(!read_object(argument,request))return 0;request.result=storage::broker::close(request.session);request.reserved=0;return write_object(argument,request)&&request.result==storage::Result::Success?1u:0u;}
+ 
++static u64 handle_get_nucleus_health(u64 argument,u64*){
++    if(process::active()!=process::Id::Desktop)return 0u;
++    const nucleus::HealthSnapshot snapshot=nucleus::health_snapshot();
++    return write_object(argument,snapshot)?1u:0u;
++}
++
+ static void install_dispatch_table() {
+     for (usize i = 0; i < DispatchTableSize; ++i) g_handlers[i] = nullptr;
+     g_handlers[DrawRect] = handle_draw_rect;
+@@ -1712,6 +1719,7 @@
+     g_handlers[PollFileWrite] = handle_poll_file_write;
+     g_handlers[ReadFileAsync] = handle_read_file_async;
+     g_handlers[PollFileRead] = handle_poll_file_read;
++    g_handlers[GetNucleusHealth] = handle_get_nucleus_health;
+ }
+ 
+ } // namespace
+--- nucleus_p1_base/src/user/shell/console.cpp	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/src/user/shell/console.cpp	2026-10-08 05:37:50.656001575 +0000
+@@ -140,7 +140,18 @@
+     if(eq("cpu")||eq("hw")){hardware::Snapshot h{};if(call(syscall::GetHardware,&h)!=1u){emit("Hardware snapshot unavailable; retry.");return;}char b[128]{};usize n=0;const char* pfx=eq("cpu")?"CPU ":"HW CPU ";for(usize i=0;pfx[i]&&n+1<sizeof(b);++i)b[n++]=pfx[i];for(usize i=0;h.cpu_brand[i]&&n+1<sizeof(b);++i)b[n++]=h.cpu_brand[i];b[n]=0;emit(b);n=0;const char* a="Memory MiB=";for(usize i=0;a[i]&&n+1<sizeof(b);++i)b[n++]=a[i];console_diag_append_dec(b,sizeof(b),n,h.physical_memory_bytes/(1024u*1024u));const char* t=" TSC Hz=";for(usize i=0;t[i]&&n+1<sizeof(b);++i)b[n++]=t[i];console_diag_append_dec(b,sizeof(b),n,h.tsc_hz);const char* pc=" PCI=";for(usize i=0;pc[i]&&n+1<sizeof(b);++i)b[n++]=pc[i];console_diag_append_dec(b,sizeof(b),n,h.pci_device_count);b[n]=0;emit(b);return;}
+     if(eq("mem")){hardware::Snapshot h{};if(call(syscall::GetHardware,&h)!=1u){emit("Memory telemetry unavailable; retry.");return;}char b[96]{};usize n=0;const char* a="Physical memory MiB=";for(usize i=0;a[i];++i)b[n++]=a[i];console_diag_append_dec(b,sizeof(b),n,h.physical_memory_bytes/(1024u*1024u));b[n]=0;emit(b);return;}
+     if(eq("kernel")){syscall::ProcessSnapshot p{};if(call(syscall::QueryProcess,&p)!=1u){emit("Kernel process snapshot unavailable.");return;}emit("Ring-0 microkernel active; capabilities + containment enforced.");char b[128]{};usize n=0;const char* a="domain ";for(usize i=0;a[i];++i)b[n++]=a[i];console_diag_append_dec(b,sizeof(b),n,p.domain_id);const char* e=" epoch ";for(usize i=0;e[i];++i)b[n++]=e[i];console_diag_append_dec(b,sizeof(b),n,p.capability_epoch);const char* f=" faults-left ";for(usize i=0;f[i];++i)b[n++]=f[i];console_diag_append_dec(b,sizeof(b),n,p.fault_budget_remaining);const char* gp=" guard-page ";for(usize i=0;gp[i];++i)b[n++]=gp[i];console_diag_append_dec(b,sizeof(b),n,p.stack_guard_pages);b[n]=0;emit(b);return;}
+-    if(eq("nucleus")){emit("Nucleus supervisor online; recovery path protected.");return;}
++    if(eq("nucleus")){
++        nucleus::HealthSnapshot h{};
++        if(call(syscall::GetNucleusHealth,&h)!=1u){emit("Nucleus health snapshot unavailable; retry.");return;}
++        char b[160]{};usize n=0;
++        auto text=[&](const char* q){for(usize i=0;q[i]&&n+1<sizeof(b);++i)b[n++]=q[i];};
++        auto dec=[&](u64 v){console_diag_append_dec(b,sizeof(b),n,v);};
++        text("NUCLEUS P1 health healthy=");dec(h.healthy);text(" suspect=");dec(h.suspect);text(" stalled=");dec(h.stalled);text(" critical-stalled=");dec(h.critical_stalled);b[n]=0;emit(b);
++        static const char* names[]={"KERNEL","SCHEDULER","DESKTOP","COMPOSITOR","INPUT","FILESYSTEM","NETWORK","AUDIO","GPU","STORAGE"};
++        static const char* states[]={"OFFLINE","STARTING","HEALTHY","SUSPECT","STALLED"};
++        for(u32 i=0;i<h.count&&i<nucleus::HealthSnapshot::Capacity;++i){const auto& r=h.records[i];if(!r.registered)continue;n=0;text("NUCLEUS ");text(names[i]);text(" state=");text(r.state<5u?states[r.state]:"?");text(" hb=");dec(r.heartbeat_count);text(" progress=");dec(r.progress_token);text(" changes=");dec(r.state_changes);text(" recoveries=");dec(r.recoveries);b[n]=0;emit(b);}
++        return;
++    }
+     if(eq("ps")){emit("Desktop Writer Calc Files Settings Browser Media Games Console Sheets Slides Notes Solum");syscall::ProcessSnapshot p{};if(call(syscall::QueryProcess,&p)==1u){char b[128]{};usize n=0;const char* a="active=";for(usize i=0;a[i];++i)b[n++]=a[i];console_diag_append_dec(b,sizeof(b),n,p.active_id);const char* q=" syscalls=";for(usize i=0;q[i];++i)b[n++]=q[i];console_diag_append_dec(b,sizeof(b),n,p.syscall_count);b[n]=0;emit(b);}return;}
+     if(eq("fs")||eq("fs check")||eq("diag fs")){console_fs_check(emit);return;}
+     if(eq("gpu check")||eq("gpu list")||eq("diag gpu")||eq("gpu services")||eq("gpu transfer")){gpu::Snapshot g{};if(call(syscall::GetGpu,&g)!=1u)emit("GPU snapshot busy/unavailable; retry.");else gpu_diagnostics::report(g,[&](const char* line){emit(line);});return;}
+--- nucleus_p1_base/scripts/build.sh	2026-10-08 03:38:52.000000000 +0000
++++ nucleus_p1/scripts/build.sh	2026-10-08 05:36:35.952912025 +0000
+@@ -44,6 +44,7 @@
+   src/arch/x86_64/cpu.cpp
+   src/arch/x86_64/serial.cpp
+   src/nucleus/recovery.cpp
++  src/nucleus/health.cpp
+   src/nucleus/journal.cpp
+   src/nucleus/virtualization.cpp
+   src/kernel/graphics.cpp
