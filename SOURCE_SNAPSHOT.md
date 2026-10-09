@@ -2,32 +2,44 @@
 
 Current licensed source package:
 
-`TrinityOS_NUCLEUS_P1_HEALTH_SOURCE.zip`
+`TrinityOS_MULTICORE_BOOT_AUTO_ADMISSION_R3_SOURCE.zip`
 
 SHA-256:
 
-`96342a9c6873aa57a469a68171440ccd71d47e77a234d9506d711ca749a6b89f`
+`e1c160ede4b406dcb2ea869eb5b554cd545165936fb1b5d2ec9c86898d22306c`
 
 Current FAT32 USB test package:
 
-`TrinityOS_NUCLEUS_P1_HEALTH_EFI.zip`
+`TrinityOS_MULTICORE_BOOT_AUTO_ADMISSION_R3_USB.zip`
 
 SHA-256:
 
-`991b85360083a817d61c68861480b6bb56df82f8c279e3c0f62bb47e2c126a7d`
+`11d15e4382d888e22596291bcc78d44794133ac59232ded58acf969ba0f2b875`
 
 Current `BOOTX64.EFI` SHA-256:
 
-`da89ea79f0e5b09441aaab6551b2d168f4fc5d9e6ef4d80a7503b694f70fb31e`
+`6b4b4ba39e2bdcbef3331a39a55018c222792628036cdc06c00a13fc443d80ea`
 
 ## Current pass
 
-**Nucleus Pass 1 — Health & Heartbeat Framework**
+**Multicore Boot Auto-Admission R3 — HARDWARE QUALIFIED**
 
-This source is based on the Application Containment R1 source and adds observation-only Nucleus supervision: subsystem registration, forward-progress heartbeats, Healthy/Suspect/Stalled classification, read-only `NUCLEUS` console telemetry, deterministic regression coverage, and hardware-test instructions.
+Release note:
 
-Pass 1 intentionally performs **no automatic recovery action**. Recovery state machines and escalation are reserved for Nucleus Pass 2 after hardware qualification of the detector.
+> Multi-core fully enabled into the high-half kernel. Automatically enters desktop with all 8-cores active.
 
-The repository contains the new Nucleus health implementation and the complete integration delta under `passes/nucleus-p1/`.
+Hardware qualification on the Acer Nitro 5 confirmed automatic admission of CPU2 through CPU7 during normal desktop boot. The post-boot `MC` evidence reported:
+
+`MC discovered=8 preparedAP=0 hw-online=8 sched-online=8 cap=8 runnable=0`
+
+and:
+
+`AUTO status=2 admitted=6 next=8 target=8 failcpu=none code=0`
+
+CPU2 through CPU7 each retained hardware-online, scheduler-online, TLB, timer, and IRQ authority. No manual `MC2START` through `MC7START` commands were required.
+
+The R3 boot coordinator drives the same hardware-qualified `GuiRuntime / MulticoreControl` transactions previously proven by the manual multicore qualification chain. APs are admitted sequentially and fail closed: a contained AP failure stops later automatic admissions for that boot while preserving the already-qualified runtime.
+
+The repository contains the R3 engineering evidence and integration notes under `passes/multicore-auto-r3/`.
 
 Copyright (c) 2026 James Davis. Third-party materials remain governed by their respective licenses.

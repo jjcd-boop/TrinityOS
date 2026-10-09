@@ -2,6 +2,16 @@
 
 Trinity OS is an independently developed x86-64 operating-system project.
 
+## Current milestone
+
+**Multicore Boot Auto-Admission R3 — hardware qualified on the Acer Nitro 5.**
+
+> Multi-core fully enabled into the high-half kernel. Automatically enters desktop with all 8-cores active.
+
+The current qualified boot path automatically admits CPU2 through CPU7 after desktop entry. The production runtime reaches `hw-online=8` and `sched-online=8` without requiring the manual `MC2START` through `MC7START` sequence. The original manual controls remain available for diagnostics and recovery.
+
+See `SOURCE_SNAPSHOT.md` and `passes/multicore-auto-r3/` for the authoritative snapshot identity, hardware evidence, engineering report, and qualification notes.
+
 ## License
 
 Trinity OS is **source-available for noncommercial use** under the `Trinity OS Noncommercial Source License 1.0`. It is not distributed under an OSI-approved open-source license.

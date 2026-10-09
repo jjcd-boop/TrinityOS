@@ -1,0 +1,9 @@
+include/trinity/gui_ipc.hpp
+src/kernel/syscall.cpp
+src/kernel/gui_runtime.cpp
+src/user/desktop.cpp
+src/user/shell/console.cpp
+tests/multicore_boot_auto_admission_r3_static.py
+MULTICORE_BOOT_AUTO_ADMISSION_R3_REPORT.md
+MULTICORE_BOOT_AUTO_ADMISSION_R3_HARDWARE_TEST.md
+MULTICORE_BOOT_AUTO_ADMISSION_R3_TO_NEW_CHAT_HANDOFF.md
