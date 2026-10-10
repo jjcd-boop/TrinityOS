@@ -1,45 +1,36 @@
-# Authoritative Trinity OS Source Snapshot
+# Trinity OS Source Snapshot
 
-Current licensed source package:
+Current published source baseline: **VM Pass 3C-R2 Production Cleanup / Freeze (2026-10-10)**.
 
-`TrinityOS_MULTICORE_BOOT_AUTO_ADMISSION_R3_SOURCE.zip`
+This snapshot incorporates the hardware-qualified dynamic multicore baseline and the current hardware-qualified virtual-memory milestone.
 
-SHA-256:
+Key state:
 
-`e1c160ede4b406dcb2ea869eb5b554cd545165936fb1b5d2ec9c86898d22306c`
+- firmware-derived multicore target, hardware-qualified with 8/8 logical CPUs active on the Acer Nitro 5;
+- current software CPU capacity: 32 logical processors (architectural support; >8 not yet hardware-qualified);
+- per-process private CR3/VM ownership sidecars;
+- VM-region metadata and mapping permission audits;
+- private Ring-3 page-fault attribution;
+- sparse anonymous first-touch zero-fill allocation;
+- 256 KiB per-process sparse heap-style reservation for private graphical apps;
+- bounded persistent anonymous-page reclaim;
+- AP Ring-3 retirement-to-kernel-idle fallback for deterministic process teardown;
+- artificial VM qualification startup probe removed for the production freeze.
 
-Current FAT32 USB test package:
+See `passes/vm-pass3c-r2/VM_PASS3C_R2_PRODUCTION_FREEZE_REPORT.md` for the full milestone history, qualification notes, limitations, and recommended future VM roadmap.
 
-`TrinityOS_MULTICORE_BOOT_AUTO_ADMISSION_R3_USB.zip`
+Full source archive:
 
-SHA-256:
+`TrinityOS_VM_PASS3C_R2_PRODUCTION_FREEZE_SOURCE.zip`
 
-`11d15e4382d888e22596291bcc78d44794133ac59232ded58acf969ba0f2b875`
+SHA-256: `b13fd6a8d39ea0e0c664ca56b01bf50b4cfe1ace9454dde9cdcaec0d475fb30c`
 
-Current `BOOTX64.EFI` SHA-256:
+FAT32 EFI tree archive:
 
-`6b4b4ba39e2bdcbef3331a39a55018c222792628036cdc06c00a13fc443d80ea`
+`TrinityOS_VM_PASS3C_R2_PRODUCTION_FREEZE_EFI.zip`
 
-## Current pass
+SHA-256: `afe322d3370adf43baef6023cd6c9beab60b4b772eb4b7e8624d3a98a6e842f3`
 
-**Multicore Boot Auto-Admission R3 — HARDWARE QUALIFIED**
+Production `BOOTX64.EFI` SHA-256 for this source snapshot:
 
-Release note:
-
-> Multi-core fully enabled into the high-half kernel. Automatically enters desktop with all 8-cores active.
-
-Hardware qualification on the Acer Nitro 5 confirmed automatic admission of CPU2 through CPU7 during normal desktop boot. The post-boot `MC` evidence reported:
-
-`MC discovered=8 preparedAP=0 hw-online=8 sched-online=8 cap=8 runnable=0`
-
-and:
-
-`AUTO status=2 admitted=6 next=8 target=8 failcpu=none code=0`
-
-CPU2 through CPU7 each retained hardware-online, scheduler-online, TLB, timer, and IRQ authority. No manual `MC2START` through `MC7START` commands were required.
-
-The R3 boot coordinator drives the same hardware-qualified `GuiRuntime / MulticoreControl` transactions previously proven by the manual multicore qualification chain. APs are admitted sequentially and fail closed: a contained AP failure stops later automatic admissions for that boot while preserving the already-qualified runtime.
-
-The repository contains the R3 engineering evidence and integration notes under `passes/multicore-auto-r3/`.
-
-Copyright (c) 2026 James Davis. Third-party materials remain governed by their respective licenses.
+`ee0d58b6d473f08e2512e3b84db87f0565b3d5c8ec0b8188886cebd0c515bcfa`
