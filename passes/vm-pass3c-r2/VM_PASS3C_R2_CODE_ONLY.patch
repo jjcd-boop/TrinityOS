@@ -1,0 +1,166 @@
+--- a/include/trinity/vm.hpp
++++ b/include/trinity/vm.hpp
+@@ -28,10 +28,9 @@
+     Device,
+ };
+ 
+-// Pass 3A separates a region's virtual existence from whether every leaf page
+-// is resident.  Existing ELF image/stack regions remain RequirePresent.
+-// Anonymous regions reserved with reserve_anonymous() are Sparse + ZeroFill
+-// and may later be materialized one page at a time by the bounded helper.
++// Region policy separates a region's virtual existence from leaf-page residency.
++// ELF image/stack regions remain RequirePresent. Anonymous sparse regions may be
++// ZeroFill + FaultMaterializable and are populated one page at a time on demand.
+ enum RegionPolicyBits : u8 {
+     RegionPolicyNone             = 0u,
+     RegionRequirePresent         = 1u << 0,
+@@ -69,10 +68,9 @@
+     uintptr next_page{0};
+ };
+ 
+-// Pass 2B keeps page-fault handling policy out of the generic exception path.
+-// These values are diagnostic classifications only: every private-app #PF is
+-// still contained by the existing GUI/application recovery machinery.  Later
+-// demand-paging work may choose to handle selected NotPresent faults instead.
++// Page-fault classification remains separate from the generic exception path.
++// The private-app policy layer may resolve an eligible anonymous NotPresent fault;
++// guard/protection/out-of-region faults continue through containment.
+ enum class FaultClass : u8 {
+     None = 0,
+     NoVmSpace,
+@@ -140,28 +138,27 @@
+ 
+ bool add_region(VmSpace& space, uintptr start, uintptr end, u32 permissions,
+                 RegionType type, bool materialized = true, u64 backing_id = 0);
+-// Reserve an anonymous user range without allocating physical pages.  Pass 3A
+-// exposes the primitive but intentionally does not use it for existing apps.
++// Reserve an anonymous user range without allocating physical pages.
+ bool reserve_anonymous(VmSpace& space, uintptr start, uintptr end, u32 permissions,
+                        u64 backing_id = 0);
+-// Pass 3B-R1: extend a READY but never-executed private address space without
+-// changing elf::LoadConfig or any boot-critical loader ABI. This is legal only
+-// while active_cpu_mask is zero; the caller must re-run audit_ready_mappings()
+-// before scheduler admission.
++// Extend a READY but never-executed private address space without changing the
++// ELF-loader ABI. This is legal only while active_cpu_mask is zero; the caller
++// must re-run audit_ready_mappings() before scheduler admission.
+ bool reserve_anonymous_prelive(VmSpace& space, uintptr start, uintptr end, u32 permissions,
+                                u64 backing_id = 0);
+ bool publish_ready(VmSpace& space);
+ bool audit_ready_mappings(const VmSpace& space);
+ FaultInfo classify_page_fault(const VmSpace& space, uintptr address, u64 error);
+ FaultInfo classify_page_fault(const mmu::AddressSpace& page_tables, uintptr address, u64 error);
+-// Bounded single-page zero-fill materialization.  The caller supplies the same
+-// capability token already used to edit this private address space.  No current
+-// application path invokes this in Pass 3A; it is the future demand-fault primitive.
++// Bounded single-page zero-fill materialization. The caller supplies the same
++// capability token already authorized to edit this private address space. This
++// is the production first-touch primitive for eligible anonymous regions.
+ MaterializeResult materialize_zero_page(VmSpace& space, uintptr address, u64 fault_error,
+                                         u32 allocation_cpu, const mmu::CapabilityToken& token,
+                                         uintptr* physical_out = nullptr);
+ // Bounded teardown sweep for pages created by reserve_anonymous/materialize_zero_page.
+-// Existing ELF/image/stack pages remain owned by their established teardown path.
++// Existing ELF/image/stack pages remain owned by their established teardown path;
++// callers persist ReclaimCursor across maintenance slices until Complete.
+ ReclaimResult reclaim_anonymous_pages(VmSpace& space, u32 allocation_cpu,
+                                       const mmu::CapabilityToken& token, u32 page_budget,
+                                       ReclaimCursor& cursor, u32* reclaimed_pages = nullptr);
+--- a/include/trinity/gui_ipc.hpp
++++ b/include/trinity/gui_ipc.hpp
+@@ -3,11 +3,11 @@
+ namespace trinity::gui {
+ constexpr u32 Version=6,Capacity=64,Calculator=2,Solum=12,Draw=13,Forge=14,LastGraphical=Forge,Idle=15,Worker2=16,SlotCount=17;
+ constexpr u32 MaxDamageRects=8;
+-// VM Pass 3C: every private graphical process receives this virtual heap-style
+-// anonymous reservation in its own CR3. The range is metadata-only at launch;
+-// physical pages are zero-filled and materialized one page at a time on valid
+-// Ring-3 first access. Keeping the layout in the shared GUI contract prevents
+-// kernel/userland drift without changing any structure ABI.
++// Production VM layout contract: each private graphical process receives this
++// heap-style anonymous reservation in its own CR3. The range is metadata-only
++// at launch; physical pages are zero-filled and materialized one page at a time
++// only after a valid Ring-3 first access. Keeping the layout in the shared GUI
++// contract prevents kernel/userland address drift without changing structure ABI.
+ constexpr uintptr PrivateAppHeapBase=0x70000000ull;
+ constexpr usize PrivateAppHeapBytes=256u*1024u;
+ // BOOT-AUTO R3 marks Desktop-owned automatic AP admission requests without
+--- a/src/kernel/gui_runtime.cpp
++++ b/src/kernel/gui_runtime.cpp
+@@ -300,7 +300,7 @@
+   if(s.va>=part.map_end){++s.segment;s.va=0;continue;}const auto released=release_page(s,s.va);if(released==ReleasePageResult::Retry)return;if(released!=ReleasePageResult::Complete){fail(s,released==ReleasePageResult::FreeFailure?Error::Free:Error::Unmap);return;}s.va+=4096;--budget;}
+  if(s.segment<s.image.plan.count)return;if(!s.va)s.va=s.image.stack.mapped_bottom;
+  while(s.va<s.image.stack.top&&budget){const auto released=release_page(s,s.va);if(released==ReleasePageResult::Retry)return;if(released!=ReleasePageResult::Complete){fail(s,released==ReleasePageResult::FreeFailure?Error::Free:Error::Unmap);return;}s.va+=4096;--budget;}if(s.va<s.image.stack.top)return;
+- // Pass 3B-R1: reclaim VM-owned lazy anonymous pages before private CR3 destruction.
++ // Reclaim VM-owned lazy anonymous pages before private CR3 destruction.
+  if(vm::VmSpace* space=vm::lookup(s.image.address_space)){u32 reclaimed=0;mmu::CapabilityToken token{&s.loader,1,LoaderCap,0,0};
+   const auto rr=vm::reclaim_anonymous_pages(*space,scheduler::current_cpu_strict(),token,16u,s.vm_reclaim_cursor,&reclaimed);
+   // Reclamation is intentionally maintenance-driven.  A transient MMU lock
+@@ -395,10 +395,10 @@
+  elf::LoadConfig config{domain,scheduler::current_cpu_strict(),0x40000000ull,0x80000000ull,mmu::kernel_template_cr3(),id,0x7ff00000ull,private_stack_bytes,0,{&s.loader,1,LoaderCap,0,0}};
+  const auto loaded=elf::load_static_elf64(app_image,app_image_bytes,config,s.image);
+  if(loaded==elf::LoadError::Success&&graphical(id)){
+-  // VM Pass 3C: every private graphical process receives the same heap-style
++  // Production VM: every private graphical process receives the same heap-style
+   // virtual reservation in its own CR3. The reservation consumes no physical
+-  // memory here; pages are materialized only by the private-app #PF path.
+-  // Keep this post-loader/pre-admission so elf::LoadConfig remains unchanged.
++  // memory here; pages are materialized only by the private-app #PF path. Keep
++  // this post-loader/pre-admission so the ELF-loader ABI remains unchanged.
+   vm::VmSpace* space=vm::lookup(s.image.address_space);
+   constexpr u64 HeapBackingTag=0x4845415000000000ull; // "HEAP" + app id
+   const uintptr heap_begin=gui::PrivateAppHeapBase;
+@@ -597,17 +597,17 @@
+  if(vector==14u){
+   const vm::FaultInfo vf=vm::classify_page_fault(s->image.address_space,static_cast<uintptr>(fault_address),error);
+   guard_hit=guard_hit||vf.classification==vm::FaultClass::GuardPage;
+-  // VM Pass 3C: service valid not-present faults for any explicitly reserved
+-  // sparse anonymous region in a private graphical process. materialize_zero_page()
+-  // re-validates region policy, permissions, capability ownership, and fault type.
++  // Resolve valid not-present faults for explicitly fault-materializable sparse
++  // anonymous regions. materialize_zero_page() re-validates region policy,
++  // permissions, capability ownership, and fault type before committing a PTE.
+   if(vf.classification==vm::FaultClass::NotPresent&&vf.region_type==vm::RegionType::Anonymous){
+    if(vm::VmSpace* space=vm::lookup(s->image.address_space)){
+     mmu::CapabilityToken token{&s->loader,1,LoaderCap,0,0};
+     const auto mr=vm::materialize_zero_page(*space,static_cast<uintptr>(fault_address),error,scheduler::current_cpu_strict(),token,nullptr);
+     if(mr==vm::MaterializeResult::Success||mr==vm::MaterializeResult::AlreadyPresent){
+-     serial::write("[vm3c] lazy page materialized app=");serial::dec(s->id);serial::write(" va=");serial::hex(fault_address&~static_cast<u64>(mmu::PageMask));serial::putc('\n');return true;
++     serial::write("[vm] lazy page materialized app=");serial::dec(s->id);serial::write(" va=");serial::hex(fault_address&~static_cast<u64>(mmu::PageMask));serial::putc('\n');return true;
+     }
+-    serial::write("[vm3c] lazy materialization denied app=");serial::dec(s->id);serial::write(" result=");serial::dec(static_cast<u32>(mr));serial::putc('\n');
++    serial::write("[vm] lazy materialization denied app=");serial::dec(s->id);serial::write(" result=");serial::dec(static_cast<u32>(mr));serial::putc('\n');
+    }
+   }
+   serial::write("[vm2b] app=");serial::dec(s->id);
+--- a/src/user/calculator_task.cpp
++++ b/src/user/calculator_task.cpp
+@@ -9,11 +9,6 @@
+ [[noreturn]] void run_calculator_task(u64 id){
+  gui::Message entry{};entry.operation=gui::Operation::RegisterExit;entry.payload=reinterpret_cast<u64>(&calculator_task_exit);
+  if(!calculator_task_request(entry))calculator_task_exit();
+- // VM Pass 3C qualification probe. Every shared private graphical app touches
+- // exactly one page of its heap reservation. A fresh process must observe zero,
+- // then retain a process-specific pattern after the fault resumes. Worker slots
+- // are excluded by gui::graphical(), and the remaining heap pages stay sparse.
+- if(gui::graphical(static_cast<u32>(id))){const uintptr HeapProbe=gui::PrivateAppHeapBase;const u64 Pattern=0x5452494e49540000ull|(id&0xffffu);volatile u64* page=reinterpret_cast<volatile u64*>(HeapProbe);if(*page!=0u)calculator_task_exit();*page=Pattern;__asm__ volatile("":::"memory");if(*page!=Pattern)calculator_task_exit();}
+  calculator_task_initialize(id);
+  if(id==gui::Idle||id==gui::Worker2){gui::Message worker_ready{};worker_ready.operation=gui::Operation::AppReady;bool worker_ready_ok=false;for(u32 retry=0;retry<64&&!worker_ready_ok;++retry){worker_ready_ok=calculator_task_request(worker_ready);if(!worker_ready_ok)__asm__ volatile("pause":::"memory");}if(!worker_ready_ok)calculator_task_exit();run_worker_tasks();}
+  calculator_task_prepare();Cursor cursor{0,0,0,0,true};gui::Message ready{};ready.operation=gui::Operation::AppReady;bool ready_ok=false;for(u32 retry=0;retry<64&&!ready_ok;++retry){ready_ok=calculator_task_request(ready);if(!ready_ok)__asm__ volatile("pause":::"memory");}if(!ready_ok)calculator_task_exit();
+--- a/tests/vm_pass3c_process_lazy_heap_static.py
++++ b/tests/vm_pass3c_process_lazy_heap_static.py
+@@ -20,10 +20,10 @@
+ ck('instruction fetch cannot instantiate heap', '(fault_error & (1ull << 4)) != 0u' in vm)
+ ck('write permission revalidated before materialize', 'write_fault && (region->permissions & Write) == 0u' in vm)
+ ck('read permission revalidated before materialize', '!write_fault && (region->permissions & Read) == 0u' in vm)
+-ck('shared apps probe generic graphical heap', 'if(gui::graphical(static_cast<u32>(id)))' in calc)
+-ck('fresh heap must zero-fill', 'if(*page!=0u)calculator_task_exit()' in calc)
+-ck('probe verifies resumed write/read', 'if(*page!=Pattern)calculator_task_exit()' in calc)
++ck('qualification-only startup heap probe removed', 'HeapProbe' not in calc and 'VM Pass 3C qualification probe' not in calc)
++ck('lazy allocation remains fault-driven', '[vm] lazy page materialized app=' in guir)
++ck('heap reservation remains sparse at admission', 'reserve_anonymous_prelive(*space,heap_begin,heap_end' in guir)
+ ck('R4 AP retirement fallback remains present', 'retire_current_to_idle' in (ROOT/'src/kernel/scheduler.cpp').read_text())
+ failed=[n for n,v in checks if not v]
+-print(f'VM Pass 3C process lazy heap static audit {len(checks)-len(failed)}/{len(checks)} ' + ('PASS' if not failed else 'FAIL'))
++print(f'VM Pass 3C/R2 production lazy heap static audit {len(checks)-len(failed)}/{len(checks)} ' + ('PASS' if not failed else 'FAIL'))
+ raise SystemExit(1 if failed else 0)
