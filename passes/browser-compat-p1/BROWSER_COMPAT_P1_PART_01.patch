@@ -1,0 +1,98 @@
+--- a/include/trinity/netstack.hpp
++++ b/include/trinity/netstack.hpp
+@@ -183,6 +183,11 @@
+     const u8* body{nullptr};
+     usize body_bytes{0};
+     const char* content_type{nullptr};
++    // Browser compatibility P1: capability-bounded request context. These are
++    // already-sanitized header values supplied by the Ring-3 Browser; the HTTP
++    // builder rejects CR/LF so page content cannot inject additional headers.
++    const char* cookie{nullptr};
++    const char* referer{nullptr};
+ };
+ 
+ usize build_http_get_ex(char* out, usize cap, const char* host, const char* path, const HttpRequestOptions& options);
+--- a/include/trinity/network.hpp
++++ b/include/trinity/network.hpp
+@@ -631,6 +631,10 @@
+     char final_url[1024]{};
+     char redirect_url[1024]{};
+     char content_type[64]{};
++    // Browser compatibility P1 response metadata. set_cookie contains a
++    // newline-separated bounded list of Set-Cookie values from this response.
++    char content_encoding[32]{};
++    char set_cookie[512]{};
+     u8 transfer_chunked{0};
+     u8 accept_ranges{0};
+     u8 partial_content{0};
+@@ -701,7 +705,8 @@
+ void service();
+ bool fetch_start(const char* url, usize bytes, u64 range_start=0, u64 range_end=0, u32 flags=0,
+                  const void* request_body=nullptr, usize request_body_bytes=0,
+-                 const char* content_type=nullptr, u64* out_request_id=nullptr);
++                 const char* content_type=nullptr, const char* cookie=nullptr,
++                 const char* referer=nullptr, u64* out_request_id=nullptr);
+ FetchStatus fetch_status();
+ u64 fetch_request_id();
+ const u8* fetch_body_data();
+--- a/include/trinity/syscall.hpp
++++ b/include/trinity/syscall.hpp
+@@ -198,6 +198,10 @@
+     const char* body;
+     usize body_length;
+     char content_type[64];
++    // Browser compatibility P1. Values only; kernel HTTP builder validates
++    // against CR/LF before emitting Cookie/Referer headers.
++    char cookie[320];
++    char referer[384];
+     u64 request_id;
+ };
+ 
+--- a/src/kernel/netstack.cpp
++++ b/src/kernel/netstack.cpp
+@@ -353,6 +353,10 @@
+     else if(options.flags&HttpRequestResource){if(!put("Accept: image/webp,image/svg+xml,image/png,image/jpeg,image/gif,image/tiff,image/x-icon,image/bmp,text/css,application/javascript,text/javascript,*/*;q=0.3\r\n"))return 0;}
+     else if(!put("Accept: text/html,application/xhtml+xml,image/webp,image/svg+xml,image/png,image/jpeg,image/gif,*/*;q=0.5\r\n"))return 0;
+     if(!put("Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: identity\r\n"))return 0;
++    auto safe_header_value=[](const char* value){if(!value)return true;for(usize i=0;value[i];++i)if(value[i]=='\r'||value[i]=='\n')return false;return true;};
++    if(!safe_header_value(options.cookie)||!safe_header_value(options.referer))return 0;
++    if(options.cookie&&options.cookie[0]){if(!put("Cookie: ")||!put(options.cookie)||!put("\r\n"))return 0;}
++    if(options.referer&&options.referer[0]){if(!put("Referer: ")||!put(options.referer)||!put("\r\n"))return 0;}
+     if(options.use_range){if(!put("Range: bytes=")||!put_u64(options.range_start)||!put("-")||!put_u64(options.range_end)||!put("\r\n"))return 0;}
+     if(options.method_post){if(!put("Content-Type: ")||!put(options.content_type&&options.content_type[0]?options.content_type:"application/x-www-form-urlencoded")||!put("\r\nContent-Length: ")||!put_u64(options.body_bytes)||!put("\r\n"))return 0;}
+     if(!(options.flags&HttpRequestMedia)&&!put("Upgrade-Insecure-Requests: 1\r\n"))return 0;
+--- a/src/kernel/network.cpp
++++ b/src/kernel/network.cpp
+@@ -87,6 +87,8 @@
+ static u8 g_fetch_request_body[kFetchRequestBodyCap]{};
+ static usize g_fetch_request_body_bytes=0;
+ static char g_fetch_request_content_type[64]{};
++static char g_fetch_request_cookie[320]{};
++static char g_fetch_request_referer[384]{};
+ static tls::Client g_tls_client{};
+ static bool g_tls_http_sent=false;
+ static u64 g_net_deadline_tsc=0;
+@@ -150,6 +152,10 @@
+     if(!p||!name||!out||cap<2)return false;usize nl=0;while(name[nl])++nl;
+     for(usize i=0;i+nl<end;++i){if(i&&p[i-1]!='\n')continue;if(!token_ci(p+i,nl,name))continue;usize q=i+nl;while(q<end&&(p[q]==' '||p[q]=='\t'))++q;usize o=0;while(q<end&&p[q]!='\r'&&p[q]!='\n'&&o+1<cap)out[o++]=static_cast<char>(p[q++]);out[o]=0;return o>0;}return false;
+ }
++static bool http_collect_header_values(const u8* p,usize end,const char* name,char* out,usize cap){
++    if(!p||!name||!out||cap<2)return false;out[0]=0;usize nl=0;while(name[nl])++nl;usize o=0;bool any=false;
++    for(usize i=0;i+nl<end;++i){if(i&&p[i-1]!='\n')continue;if(!token_ci(p+i,nl,name))continue;usize q=i+nl;while(q<end&&(p[q]==' '||p[q]=='\t'))++q;if(any&&o+1<cap)out[o++]='\n';while(q<end&&p[q]!='\r'&&p[q]!='\n'&&o+1<cap)out[o++]=static_cast<char>(p[q++]);any=true;}out[o]=0;return any;
++}
+ static int hex_value(u8 c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return 10+c-'a';if(c>='A'&&c<='F')return 10+c-'A';return -1;}
+ static bool parse_u64_dec(const char* s,u64& out){if(!s||!s[0])return false;u64 v=0;usize i=0;while(s[i]>='0'&&s[i]<='9'){const u64 d=static_cast<u64>(s[i]-'0');if(v>(~0ull-d)/10ull)return false;v=v*10ull+d;++i;}if(!i)return false;out=v;return true;}
+ static bool parse_content_range(const char* s,u64& a,u64& b,u64& total){if(!s)return false;usize i=0;while(s[i]==' ')++i;if(!(s[i]=='b'||s[i]=='B')||!(s[i+1]=='y'||s[i+1]=='Y')||!(s[i+2]=='t'||s[i+2]=='T')||!(s[i+3]=='e'||s[i+3]=='E')||!(s[i+4]=='s'||s[i+4]=='S'))return false;i+=5;while(s[i]==' ')++i;auto read=[&](u64&v){v=0;usize n=0;while(s[i]>='0'&&s[i]<='9'){v=v*10u+static_cast<u64>(s[i]-'0');++i;++n;}return n>0;};if(!read(a)||s[i++]!='-'||!read(b)||s[i++]!='/')return false;if(s[i]=='*'){total=0;return true;}return read(total);}
+@@ -164,6 +170,8 @@
+     if(!g_fetch_active)return;const usize he=find_http_header_end(g_http_rx_header,g_http_rx_bytes);if(he==g_http_rx_bytes){fetch_fail(FetchError::Http,g_http_rx_truncated?"HTTP HEADER EXCEEDED BOUNDED TRANSPORT PREFIX":"HTTP RESPONSE ENDED BEFORE COMPLETE HEADERS");return;}
+     if(g_http_rx_bytes>=12&&token_ci(g_http_rx_header,5,"http/")){usize p0=9;u32 code=0;for(int i=0;i<3&&p0<g_http_rx_bytes;++i,++p0)if(g_http_rx_header[p0]>='0'&&g_http_rx_header[p0]<='9')code=code*10u+(g_http_rx_header[p0]-'0');g_fetch_status.http_status=code;}
+     (void)http_header_value(g_http_rx_header,he,"content-type:",g_fetch_status.content_type,sizeof(g_fetch_status.content_type));
++    (void)http_header_value(g_http_rx_header,he,"content-encoding:",g_fetch_status.content_encoding,sizeof(g_fetch_status.content_encoding));
++    (void)http_collect_header_values(g_http_rx_header,he,"set-cookie:",g_fetch_status.set_cookie,sizeof(g_fetch_status.set_cookie));
+     (void)http_header_value(g_http_rx_header,he,"location:",g_fetch_status.redirect_url,sizeof(g_fetch_status.redirect_url));
+     char transfer[64]{};if(http_header_value(g_http_rx_header,he,"transfer-encoding:",transfer,sizeof(transfer))){for(usize i=0;transfer[i];++i)if((transfer[i]=='c'||transfer[i]=='C')&&token_ci(reinterpret_cast<const u8*>(transfer+i),7,"chunked")){g_fetch_status.transfer_chunked=1;break;}}
+     char lenv[32]{};if(http_header_value(g_http_rx_header,he,"content-length:",lenv,sizeof(lenv)))(void)parse_u64_dec(lenv,g_fetch_status.content_length);
+@@ -1901,7 +1909,7 @@
+         fetch_fail(FetchError::TlsHandshake,(g_has_rdseed||g_has_rdrand)?"TLS HARDWARE ENTROPY RETRIES EXHAUSTED":"TLS HARDWARE ENTROPY UNAVAILABLE - RDSEED/RDRAND NOT PRESENT");return false;}const auto wc=native_platform::wall_clock_now();tls::Clock clk{};clk.year=wc.year;clk.month=wc.month;clk.day=wc.day;clk.hour=wc.hour;clk.minute=wc.minute;clk.second=wc.second;clk.valid=wc.valid;if(!g_tls_client.begin(g_fetch_host,seed,clk)){publish_tls_status();fetch_fail(FetchError::TlsHandshake,"TLS CLIENT INITIALIZATION FAILED");return false;}publish_tls_status();g_tls_http_sent=false;g_net_runtime.tcp_state=5u;g_fetch_status.state=FetchState::Receiving;g_net_deadline_tsc=trinity_rdtsc()+g_tsc_hz*8ull;return drain_tls_output();
+ }
+ static bool service_tls_payload(const u8* payload,usize bytes){
