@@ -4,13 +4,15 @@ Trinity OS is an independently developed x86-64 operating-system project.
 
 ## Current milestone
 
-**Multicore Boot Auto-Admission R3 — hardware qualified on the Acer Nitro 5.**
+**VM Pass 3C-R2 — Production Cleanup / Freeze (2026-10-10).**
 
-> Multi-core fully enabled into the high-half kernel. Automatically enters desktop with all 8-cores active.
+This baseline combines the hardware-qualified firmware-derived multicore path with Trinity's current per-process virtual-memory milestone. On the Acer Nitro 5, Trinity has been hardware-qualified with all 8 logical processors active; the current software topology/descriptor capacity is 32 logical processors, with >8 still awaiting hardware qualification.
 
-The current qualified boot path automatically admits CPU2 through CPU7 after desktop entry. The production runtime reaches `hw-online=8` and `sched-online=8` without requiring the manual `MC2START` through `MC7START` sequence. The original manual controls remain available for diagnostics and recovery.
+The VM baseline now includes private per-process CR3/address-space ownership, explicit VM regions, pre-admission mapping and guard audits, private Ring-3 page-fault attribution, sparse anonymous first-touch zero-fill allocation, a 256 KiB per-process sparse heap-style reservation, bounded persistent anonymous-page reclamation, and the generic AP Ring-3 retirement-to-kernel-idle scheduler repair discovered during teardown qualification.
 
-See `SOURCE_SNAPSHOT.md` and `passes/multicore-auto-r3/` for the authoritative snapshot identity, hardware evidence, engineering report, and qualification notes.
+Pass 3C-R2 removes the temporary startup heap-touch qualification probe so anonymous memory is now committed only by real application access. It intentionally freezes the VM subsystem before growable heaps, mapped files, copy-on-write, page replacement, or swap.
+
+See `SOURCE_SNAPSHOT.md` and `passes/vm-pass3c-r2/` for the source slice, production hashes, audits, milestone history, current limitations, and restart plan.
 
 ## License
 
