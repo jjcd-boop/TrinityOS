@@ -1,0 +1,71 @@
++    request.url[sizeof(request.url)-1]=0;request.content_type[sizeof(request.content_type)-1]=0;request.cookie[sizeof(request.cookie)-1]=0;request.referer[sizeof(request.referer)-1]=0;request.request_id=0;
+     usize n=request.url_length;if(n>=sizeof(request.url))n=sizeof(request.url)-1;
+     constexpr usize kPostBodyCap=768u;u8 post_body[kPostBodyCap]{};const void* body=nullptr;usize body_bytes=request.body_length;
+     if(body_bytes){if(body_bytes>kPostBodyCap||!request.body||!validate_user_pages(request.body,body_bytes,false)||!copy_from_user(post_body,request.body,body_bytes)){(void)write_object(argument,request);return 0;}body=post_body;}
+-    u64 request_id=0;const bool ok=network::fetch_start(request.url,n,request.range_start,request.range_end,request.flags,body,body_bytes,request.content_type,&request_id);request.request_id=request_id;
++    u64 request_id=0;const bool ok=network::fetch_start(request.url,n,request.range_start,request.range_end,request.flags,body,body_bytes,request.content_type,request.cookie,request.referer,&request_id);request.request_id=request_id;
+     if(!write_object(argument,request))return 0;return ok?1u:0u;
+ }
+ 
+--- a/src/user/apps/browser.cpp
++++ b/src/user/apps/browser.cpp
+@@ -53,6 +53,15 @@
+ struct BrowserImagePlacement { u16 resource_id{0xffffu}; i32 x{0},y{0},w{0},h{0}; };
+ enum class BrowserDecodeKind:u8 { PageImage=0, LocalFile=1, InlineSvg=2 };
+ struct BrowserDecodeSource { BrowserDecodeKind kind{BrowserDecodeKind::PageImage}; u8 state{0}; u16 resource_id{0xffffu}; u32 page_offset{0},bytes{0}; char path[256]{}; };
++// Browser compatibility P1: bounded in-process cookie jar. This deliberately
++// keeps cookies in Ring-3 and never gives page script direct access to HttpOnly
++// state. Persistence and SameSite policy can be layered on this contract later.
++struct BrowserCookie {
++    bool used{false}; bool secure{false}; bool host_only{true};
++    char domain[128]{}; char path[96]{"/"}; char name[48]{}; char value[160]{};
++    u32 stamp{0};
++};
++static constexpr usize kBrowserCookieSlots=16;
+ static constexpr usize kBrowserImagePlacements=200;
+ static constexpr usize kBrowserDecodeSources=32;
+ enum : u8 { BrowserImageErrorNone=0, BrowserImageErrorFetch=1, BrowserImageErrorHttp=2, BrowserImageErrorTooLarge=3, BrowserImageErrorDecode=4, BrowserImageErrorQueue=5 };
+@@ -100,6 +109,7 @@
+     char script_urls[kBrowserScriptSlots][512];u8 script_count=0,script_index=0;u8 script_redirects=0,script_loaded=0,script_failed=0;
+     web::MediaBootstrap media; web::Mp4Probe media_probe; bool media_probe_done;
+     i32 media_button_x; i32 media_button_y; i32 media_button_w; i32 media_button_h;
++    BrowserCookie cookies[kBrowserCookieSlots]{}; u32 cookie_stamp{0};
+ };
+ 
+ static bool browser_starts(const char* s,usize n,const char* p);
+@@ -109,6 +119,8 @@
+ static bool browser_load(BrowserState& st,bool push_history);
+ static bool browser_start_next_local_decode(BrowserState& st);
+ static bool browser_resource_visible(const BrowserState& st,u16 rid);
++static void browser_apply_request_context(BrowserState& st,syscall::NetworkFetchStartRequest& r,const char* url,usize url_len,bool subresource);
++static void browser_store_response_cookies(BrowserState& st,const char* url,const char* set_cookie);
+ static void browser_invalidate_document(BrowserState& st){st.document_prepared=false;st.image_placement_count=0;st.image_dirty_resource=0xffffu;}
+ static void browser_status(BrowserState& st,const char* msg){usize i=0;while(msg&&msg[i]&&i<sizeof(st.status)-1){st.status[i]=msg[i];++i;}st.status[i]=0;}
+ static void browser_page_info(BrowserState& st){
+@@ -119,6 +131,34 @@
+ static void browser_set_address(BrowserState& st,const char* s){usize i=0;while(s&&s[i]&&i<sizeof(st.address)-1){st.address[i]=s[i];++i;}st.address[i]=0;st.address_len=i;}
+ static void browser_reset_form_state(BrowserState& st){st.focused_control=-1;st.selected_control=-1;st.control_count=0;st.form_count=0;st.current_form=-1;for(usize i=0;i<kBrowserControlSlots;++i){st.form_value_len[i]=0;st.form_values[i][0]=0;st.form_value_initialized[i]=false;st.form_checked[i]=false;st.form_checked_initialized[i]=false;}for(usize i=0;i<kBrowserFormSlots;++i)st.forms[i]=BrowserForm{};}
+ static bool browser_starts(const char* s,usize n,const char* p){usize i=0;while(p[i]){if(i>=n||s[i]!=p[i])return false;++i;}return true;}
++static bool browser_url_parts(const char* url,usize n,char* host,usize hcap,usize& hn,char* path,usize pcap,usize& pn,bool& secure){
++    hn=pn=0;secure=false;if(!url||!host||hcap<2||!path||pcap<2)return false;usize p=0;
++    if(browser_starts(url,n,"https://")){secure=true;p=8;}else if(browser_starts(url,n,"http://")){p=7;}else return false;
++    while(p<n&&url[p]!='/'&&url[p]!='?'&&url[p]!='#'&&hn+1<hcap){char c=url[p++];if(c==':'){while(p<n&&url[p]!='/'&&url[p]!='?'&&url[p]!='#')++p;break;}if(c>='A'&&c<='Z')c=static_cast<char>(c+32);host[hn++]=c;}host[hn]=0;if(!hn)return false;
++    if(p<n&&url[p]=='/'){while(p<n&&url[p]!='?'&&url[p]!='#'&&pn+1<pcap)path[pn++]=url[p++];}else path[pn++]='/';path[pn]=0;return true;
++}
++static bool browser_domain_match(const char* host,const char* domain,bool host_only){if(!host||!domain||!host[0]||!domain[0])return false;usize hn=cstrlen(host),dn=cstrlen(domain);if(host_only){if(hn!=dn)return false;for(usize i=0;i<hn;++i)if(host[i]!=domain[i])return false;return true;}if(hn<dn)return false;const usize off=hn-dn;for(usize i=0;i<dn;++i)if(host[off+i]!=domain[i])return false;return off==0||host[off-1]=='.';}
++static bool browser_path_match(const char* request_path,const char* cookie_path){if(!request_path||!cookie_path||!cookie_path[0])return true;usize pn=cstrlen(cookie_path),rn=cstrlen(request_path);if(pn>rn)return false;for(usize i=0;i<pn;++i)if(request_path[i]!=cookie_path[i])return false;return true;}
++static bool browser_token_ci_equal(const char* a,usize an,const char* b){const usize bn=cstrlen(b);if(an!=bn)return false;for(usize i=0;i<an;++i){char x=a[i],y=b[i];if(x>='A'&&x<='Z')x=static_cast<char>(x+32);if(y>='A'&&y<='Z')y=static_cast<char>(y+32);if(x!=y)return false;}return true;}
++static void browser_store_cookie_line(BrowserState& st,const char* url,const char* line,usize ln){
++    char host[128]{},request_path[96]{};usize hn=0,rpn=0;bool request_secure=false;if(!browser_url_parts(url,cstrlen(url),host,sizeof(host),hn,request_path,sizeof(request_path),rpn,request_secure))return;
++    usize p=0;while(p<ln&&(line[p]==' '||line[p]=='\t'))++p;usize eq=p;while(eq<ln&&line[eq]!='='&&line[eq]!=';')++eq;if(eq>=ln||line[eq]!='='||eq==p)return;
++    char name[48]{};usize nn=0;for(usize i=p;i<eq&&nn+1<sizeof(name);++i)name[nn++]=line[i];name[nn]=0;if(!nn)return;
++    usize v=eq+1;usize vend=v;while(vend<ln&&line[vend]!=';')++vend;while(vend>v&&(line[vend-1]==' '||line[vend-1]=='\t'))--vend;char value[160]{};usize vn=0;for(usize i=v;i<vend&&vn+1<sizeof(value);++i)value[vn++]=line[i];value[vn]=0;
++    char domain[128]{};for(usize i=0;i<=hn;++i)domain[i]=host[i];bool host_only=true,secure=false,remove=false;char cpath[96]{'/','\0'};
++    p=vend;while(p<ln){if(line[p]==';')++p;while(p<ln&&(line[p]==' '||line[p]=='\t'))++p;const usize a=p;while(p<ln&&line[p]!='='&&line[p]!=';')++p;usize ae=p;while(ae>a&&(line[ae-1]==' '||line[ae-1]=='\t'))--ae;const bool has_value=p<ln&&line[p]=='=';usize av=0,ave=0;if(has_value){av=++p;while(p<ln&&line[p]!=';')++p;ave=p;while(ave>av&&(line[ave-1]==' '||line[ave-1]=='\t'))--ave;}
++        if(browser_token_ci_equal(line+a,ae-a,"secure"))secure=true;
++        else if(has_value&&browser_token_ci_equal(line+a,ae-a,"domain")){usize d=av;if(d<ave&&line[d]=='.')++d;usize dn=0;for(;d<ave&&dn+1<sizeof(domain);++d){char c=line[d];if(c>='A'&&c<='Z')c=static_cast<char>(c+32);domain[dn++]=c;}domain[dn]=0;host_only=false;if(!browser_domain_match(host,domain,false))return;}
++        else if(has_value&&browser_token_ci_equal(line+a,ae-a,"path")){usize n=0;for(usize i=av;i<ave&&n+1<sizeof(cpath);++i)cpath[n++]=line[i];cpath[n]=0;if(!n||cpath[0]!='/'){cpath[0]='/';cpath[1]=0;}}
++        else if(has_value&&browser_token_ci_equal(line+a,ae-a,"max-age")){bool zero=true;usize i=av;if(i<ave&&(line[i]=='+'||line[i]=='-')){if(line[i]=='-')zero=false;++i;}if(i==ave)zero=false;for(;i<ave;++i)if(line[i]!='0'){zero=false;break;}if(zero)remove=true;}
++    }
++    BrowserCookie* slot=nullptr;for(auto& c:st.cookies)if(c.used&&browser_token_ci_equal(c.name,cstrlen(c.name),name)&&browser_token_ci_equal(c.domain,cstrlen(c.domain),domain)&&browser_token_ci_equal(c.path,cstrlen(c.path),cpath)){slot=&c;break;}
++    if(remove){if(slot)*slot=BrowserCookie{};return;}if(!slot){for(auto& c:st.cookies)if(!c.used){slot=&c;break;}if(!slot){slot=&st.cookies[0];for(auto& c:st.cookies)if(c.stamp<slot->stamp)slot=&c;}}
