@@ -28,7 +28,7 @@ Current working source baseline: **Desktop + Browser Usability R1 (2026-10-11)**
 
 See:
 
-- `passes/desktop-browser-usability-r1/TRINITY_CONTROL_TASKBAR_R1.patch`
+- `passes/desktop-browser-usability-r1/apply_trinity_control_taskbar_r1.py`
 - `passes/desktop-browser-usability-r1/TRINITY_CONTROL_TASKBAR_R1_REPORT.md`
 - `passes/desktop-browser-usability-r1/DESKTOP_BROWSER_USABILITY_R1_RELEASE_NOTES.md`
 - `passes/vm-pass3c-r2/` for the underlying production source snapshot and VM baseline.
