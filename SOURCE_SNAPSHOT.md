@@ -1,10 +1,18 @@
 # Trinity OS Source Snapshot
 
-Current published source baseline: **VM Pass 3C-R2 Production Cleanup / Freeze (2026-10-10)**.
+Current working source baseline: **Desktop + Browser Usability R1 (2026-10-11)**, built on the hardware-qualified **VM Pass 3C-R2 Production Cleanup / Freeze** baseline and the Browser P15 R5 development line.
 
-This snapshot incorporates the hardware-qualified dynamic multicore baseline and the current hardware-qualified virtual-memory milestone.
+## Current usability state
 
-Key state:
+- Trinity Control moved from the floating desktop HUD into the existing fixed-height top taskbar immediately left of Nucleus.
+- The taskbar was not expanded and no additional desktop working area is consumed.
+- Trinity Control now launches Settings / Control Panel directly.
+- Browser usability has advanced through the P15 R5 line.
+- Realtek wired Ethernet is operational in the current desktop path.
+- The Trinity browser has been hardware-observed successfully connecting to **Google over Ethernet** on the Acer Nitro 5.
+- Intel AX200 Wi-Fi startup remains deferred and is not included in the Google-over-Ethernet verification.
+
+## Preserved architecture baseline
 
 - firmware-derived multicore target, hardware-qualified with 8/8 logical CPUs active on the Acer Nitro 5;
 - current software CPU capacity: 32 logical processors (architectural support; >8 not yet hardware-qualified);
@@ -14,23 +22,29 @@ Key state:
 - sparse anonymous first-touch zero-fill allocation;
 - 256 KiB per-process sparse heap-style reservation for private graphical apps;
 - bounded persistent anonymous-page reclaim;
-- AP Ring-3 retirement-to-kernel-idle fallback for deterministic process teardown;
-- artificial VM qualification startup probe removed for the production freeze.
+- AP Ring-3 retirement-to-kernel-idle fallback for deterministic process teardown.
 
-See `passes/vm-pass3c-r2/VM_PASS3C_R2_PRODUCTION_FREEZE_REPORT.md` for the full milestone history, qualification notes, limitations, and recommended future VM roadmap.
+## Published source delta and reports
 
-Full source archive:
+See:
 
-`TrinityOS_VM_PASS3C_R2_PRODUCTION_FREEZE_SOURCE.zip`
+- `passes/desktop-browser-usability-r1/TRINITY_CONTROL_TASKBAR_R1.patch`
+- `passes/desktop-browser-usability-r1/TRINITY_CONTROL_TASKBAR_R1_REPORT.md`
+- `passes/desktop-browser-usability-r1/DESKTOP_BROWSER_USABILITY_R1_RELEASE_NOTES.md`
+- `passes/vm-pass3c-r2/` for the underlying production source snapshot and VM baseline.
 
-SHA-256: `b13fd6a8d39ea0e0c664ca56b01bf50b4cfe1ace9454dde9cdcaec0d475fb30c`
+Working source archive:
 
-FAT32 EFI tree archive:
+`TrinityOS_TASKBAR_TRINITY_CONTROL_R1_SOURCE.zip`
 
-`TrinityOS_VM_PASS3C_R2_PRODUCTION_FREEZE_EFI.zip`
+SHA-256:
 
-SHA-256: `afe322d3370adf43baef6023cd6c9beab60b4b772eb4b7e8624d3a98a6e842f3`
+`33025a39988518398a3a40fb517132c9f98bcab099e86c45540deac23962afd7`
 
-Production `BOOTX64.EFI` SHA-256 for this source snapshot:
+Updated `src/user/desktop.cpp` SHA-256:
 
-`ee0d58b6d473f08e2512e3b84db87f0565b3d5c8ec0b8188886cebd0c515bcfa`
+`cf4f1a6fb04360c99943c5d766cea283de42a501fff673a827b0f45e73d941e7`
+
+## Verification language
+
+The Trinity Control taskbar integration is build-verified. Google-over-Ethernet is a hardware-observed browser/network result. This snapshot does not claim full browser compatibility and does not mark AX200 Wi-Fi as hardware-qualified.
