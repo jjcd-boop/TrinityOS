@@ -19,9 +19,7 @@ This pass prepares Trinity's save-capable applications for backend-neutral TFS +
 - inherited TFS/exFAT/Phase-9D/Phase-9E safety regressions PASS
 - rebuilt FSSVC ELF: 880,448 bytes, 3 PT_LOAD segments
 
-## Source delivery
-
-The four numbered `*.patch` files in this directory together are the exact Git binary source delta from the Phase-9E software-ready baseline commit above to the final AppCompat seal commit. Apply them in numeric order to the corresponding R58 Phase-9E software-ready source tree.
+## Source provenance
 
 The independently verified full source archive produced in the development session is:
 
@@ -31,7 +29,9 @@ SHA-256:
 
 `70f117ccecf8b4fea6970823d2088e56084b29d86403ddfd4979fc2d5396e675`
 
-The GitHub connector used for this publication cannot stream the 6.9 MiB binary archive as a release asset, so this branch publishes the complete textual source delta, qualification evidence, design, plan, changed-file manifest, and archive checksum.
+`CHANGED_FILES.txt` records the exact 41-path source delta between the Phase-9E software-ready baseline and the final AppCompat seal. `PUBLICATION_MANIFEST.txt`, the qualification report, the handoff, and the Phase-9 status file record the exact commits and qualification evidence. A design-provenance patch is also included under `patches/`.
+
+The connected GitHub interface cannot stream the 6.9 MiB binary source ZIP as a release asset in this conversation, so this publication does not claim that the full ZIP bytes are present in the repository. The verified archive remains identified by its exact filename and SHA-256 above.
 
 ## Safety boundary
 
