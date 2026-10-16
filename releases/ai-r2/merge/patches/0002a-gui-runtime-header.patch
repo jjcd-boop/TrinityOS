@@ -1,0 +1,21 @@
+diff --git a/include/trinity/gui_runtime.hpp b/include/trinity/gui_runtime.hpp
+index 041480f..db14795 100644
+--- a/include/trinity/gui_runtime.hpp
++++ b/include/trinity/gui_runtime.hpp
+@@ -3,6 +3,7 @@
+ #include "gui_diagnostics.hpp"
+ #include "graphics.hpp"
+ #include "scheduler.hpp"
++#include "ai_action_broker.hpp"
+ namespace trinity::gui {
+ bool initialize(const u8* image,usize bytes);
+ bool configure_private_executable(u32 app_id,const u8* image,usize bytes);
+@@ -10,6 +11,8 @@ bool start_boot_workers();
+ // R7: executes at most one queued private-app admission from a non-BSP context.
+ // Heavy ELF/MMU work must not run from the CPU0 desktop Service syscall.
+ bool service_background_launch();
++ai_action::Result execute_ai_action(const ai_action::Request& request,const ai_action_broker::Context& context) noexcept;
++ai_action::AuditSnapshot ai_action_audit_snapshot() noexcept;
+ u64 control(u64 request);
+ bool enabled();u64 take_document(u64 request);u64 set_document(u64 request);
+ u64 job_control(u64 request);
