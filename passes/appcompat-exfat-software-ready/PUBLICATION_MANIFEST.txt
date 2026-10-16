@@ -1,0 +1,13 @@
+Trinity AppCompat exFAT publication manifest
+
+baseline_commit=af5a5b43a293e36deb93c85f1f53dbfaeb178755
+qualified_code_checkpoint=faec0db
+final_seal_commit=1c5c0016e22b0f1aee4b7e63038dd90fd1540890
+full_source_archive=TrinityOS_R58_APPCOMPAT_EXFAT_SOFTWARE_READY_SOURCE_1c5c001.zip
+full_source_archive_sha256=70f117ccecf8b4fea6970823d2088e56084b29d86403ddfd4979fc2d5396e675
+physical_exfat_writes_enabled=no
+phase9e_hardware_qualified=no
+qualification_gates=8/8 PASS
+deterministic_campaign=100/100 PASS
+fssvc_elf_bytes=880448
+fssvc_pt_load=3
