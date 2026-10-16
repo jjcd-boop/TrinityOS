@@ -1,0 +1,147 @@
+diff --git a/include/trinity/ai_service.hpp b/include/trinity/ai_service.hpp
+index be50f2e..3d478c2 100644
+--- a/include/trinity/ai_service.hpp
++++ b/include/trinity/ai_service.hpp
+@@ -1,6 +1,8 @@
+ #pragma once
+ #include "base.hpp"
+ #include "ai_protocol.hpp"
++#include "ai_provider.hpp"
++#include "ai_action_protocol.hpp"
+ 
+ namespace trinity::ai_service {
+ constexpr u32 ContractVersion = 1u;
+@@ -31,6 +33,9 @@ struct Service {
+     ai_protocol::Status status{};
+     ai_protocol::ActiveConfig config{};
+     ai_protocol::Manifest manifest{};
++    ai_provider::State provider{};
++    ai_provider::Result provider_result{};
++    ai_action::Result action_result{};
+ };
+ 
+ void initialize(Service& service) noexcept;
+diff --git a/include/trinity/gui_ipc.hpp b/include/trinity/gui_ipc.hpp
+index 7698ee1..cd54075 100644
+--- a/include/trinity/gui_ipc.hpp
++++ b/include/trinity/gui_ipc.hpp
+@@ -1,6 +1,8 @@
+ #pragma once
+ #include "base.hpp"
+ #include "ai_protocol.hpp"
++#include "ai_provider.hpp"
++#include "ai_action_protocol.hpp"
+ namespace trinity::gui {
+ constexpr u32 Version=7,Capacity=64,Calculator=2,Solum=12,Draw=13,Forge=14,LastGraphical=Forge,Idle=15,Worker2=16;
+ // Browser P15 multi-process tab architecture. The primary Browser remains slot 5
+@@ -73,11 +75,14 @@ struct JsWorkerIpc {
+  u64 generation=0; State state=State::Empty; Error error=Error::None; u32 reserved=0;
+ };
+ 
+-constexpr u32 AiServiceIpcVersion=1;
+-enum class AiWorkerCommand:u32 {Client=0,PublishStatus=1,Poll=2};
++constexpr u32 AiServiceIpcVersion=2;
++enum class AiWorkerCommand:u32 {Client=0,PublishStatus=1,Poll=2,ProviderConfigure=3,ProviderSubmit=4,ProviderPoll=5,ProviderCancel=6,ActionSubmit=7,ActionPoll=8,BrokerStatus=9,AuditSnapshot=10,PublishProviderResult=11};
++enum class AiWorkerTask:u32 {None=0,ConfigureProvider=1,SubmitProvider=2,CancelProvider=3};
+ struct AiServiceIpc {
+  u32 version=AiServiceIpcVersion; ai_protocol::Action action=ai_protocol::Action::Status; Result result=Result::Invalid; AiWorkerCommand worker=AiWorkerCommand::Client;
+  u32 flags=0,reserved=0; u64 generation=0; State state=State::Empty; Error error=Error::None; ai_protocol::Status status{};
++ AiWorkerTask task=AiWorkerTask::None; ai_provider::Status provider_status=ai_provider::Status::Disabled; ai_action::ProviderId provider_id=ai_action::ProviderId::RemoteOllama; ai_provider::RemoteEndpoint endpoint{};
++ ai_action::Request action_request{}; ai_action::Result action_result{}; u64 payload=0; u32 payload_bytes=0; u32 payload_capacity=0;
+ };
+ 
+ constexpr u32 BrowserMemoryVersion=1;
+diff --git a/scripts/build_aisvc_elf.sh b/scripts/build_aisvc_elf.sh
+index 7ad8b29..cc33926 100755
+--- a/scripts/build_aisvc_elf.sh
++++ b/scripts/build_aisvc_elf.sh
+@@ -6,10 +6,12 @@ CXX="${ELF_CXX:-clang++}"
+ COMMON=(--target=x86_64-unknown-none-elf -std=c++20 -O2 -ffreestanding -nostdlib -fno-exceptions -fno-rtti -fno-stack-protector -fno-threadsafe-statics -fno-pie -fno-builtin -mno-red-zone -ffunction-sections -fdata-sections -Wall -Wextra -Werror -I"$ROOT/include")
+ "$CXX" "${COMMON[@]}" -c "$ROOT/src/user/gguf_probe.cpp" -o "$OUT/gguf_probe.o"
+ "$CXX" "${COMMON[@]}" -c "$ROOT/src/user/ai_service.cpp" -o "$OUT/ai_service.o"
++"$CXX" "${COMMON[@]}" -c "$ROOT/src/user/ai_provider.cpp" -o "$OUT/ai_provider.o"
++"$CXX" "${COMMON[@]}" -c "$ROOT/src/user/ai_provider_ollama.cpp" -o "$OUT/ai_provider_ollama.o"
+ "$CXX" "${COMMON[@]}" -c "$ROOT/userland/aisvc_entry.cpp" -o "$OUT/aisvc_entry.o"
+ "$CXX" "${COMMON[@]}" -c "$ROOT/userland/desktop_first/runtime.S" -o "$OUT/runtime.o"
+ "$CXX" --target=x86_64-unknown-none-elf -nostdlib -fuse-ld=lld -Wl,-no-pie -Wl,-T,"$ROOT/userland/trinity_user.ld" -Wl,--build-id=none -Wl,--gc-sections -Wl,-z,noexecstack \
+- "$OUT/aisvc_entry.o" "$OUT/ai_service.o" "$OUT/gguf_probe.o" "$OUT/runtime.o" -o "$OUT/AISVC.ELF"
++ "$OUT/aisvc_entry.o" "$OUT/ai_service.o" "$OUT/ai_provider.o" "$OUT/ai_provider_ollama.o" "$OUT/gguf_probe.o" "$OUT/runtime.o" -o "$OUT/AISVC.ELF"
+ python3 - "$OUT/AISVC.ELF" <<'PY'
+ import struct,sys
+ p=sys.argv[1];b=open(p,'rb').read()
+diff --git a/userland/aisvc_entry.cpp b/userland/aisvc_entry.cpp
+index d95a03c..175ae27 100644
+--- a/userland/aisvc_entry.cpp
++++ b/userland/aisvc_entry.cpp
+@@ -1,5 +1,7 @@
+ #include "trinity/ai_service.hpp"
++#include "trinity/ai_provider.hpp"
+ #include "trinity/gui_ipc.hpp"
++#include "trinity/network.hpp"
+ #include "trinity/storage/result.hpp"
+ #include "trinity/syscall.hpp"
+ 
+@@ -8,19 +10,55 @@ extern "C" void* memset(void* p,int v,unsigned long n){auto* b=static_cast<trini
+ extern "C" void* memcpy(void* d,const void* s,unsigned long n){auto* o=static_cast<trinity::u8*>(d);auto* i=static_cast<const trinity::u8*>(s);for(unsigned long k=0;k<n;++k)o[k]=i[k];return d;}
+ namespace {
+ using namespace trinity;
+-bool gui_request(gui::Message& m) noexcept {m.version=gui::Version;for(u32 i=0;i<96u;++i){const u64 r=trinity_user_syscall(syscall::GuiRuntime,reinterpret_cast<u64>(&m));if(r==gui::Busy){__asm__ volatile("pause":::"memory");continue;}return r!=0&&m.result==gui::Result::Ok;}return false;}
++ai_provider::HttpRequest g_http_request{};
++ai_provider::Prompt g_pending_prompt{};
++ai_provider::Result g_provider_result{};
++alignas(64) char g_response[ai_provider::MaxResponseBytes]{};
++u64 g_fetch_request_id=0;
+ 
++usize text_len(const char* s) noexcept{usize n=0;while(s&&s[n])++n;return n;}
++void copy_text(char* d,usize cap,const char* s) noexcept{if(!d||!cap)return;usize i=0;while(s&&s[i]&&i+1u<cap){d[i]=s[i];++i;}d[i]=0;}
++bool gui_request(gui::Message& m) noexcept {m.version=gui::Version;for(u32 i=0;i<96u;++i){const u64 r=trinity_user_syscall(syscall::GuiRuntime,reinterpret_cast<u64>(&m));if(r==gui::Busy){__asm__ volatile("pause":::"memory");continue;}return r!=0&&m.result==gui::Result::Ok;}return false;}
+ bool ai_ipc(gui::AiServiceIpc& q) noexcept {gui::Message m{};m.operation=gui::Operation::AI;m.payload=reinterpret_cast<u64>(&q);return gui_request(m);}
+ bool publish_status(const ai_service::Service& service) noexcept {gui::AiServiceIpc q{};q.worker=gui::AiWorkerCommand::PublishStatus;q.status=ai_service::status_snapshot(service);return ai_ipc(q);}
+-bool probe_requested() noexcept {gui::AiServiceIpc q{};q.worker=gui::AiWorkerCommand::Poll;if(!ai_ipc(q))return false;return q.flags!=0u;}
++bool publish_provider_result(ai_provider::Result& result) noexcept{gui::AiServiceIpc q{};q.worker=gui::AiWorkerCommand::PublishProviderResult;q.payload=reinterpret_cast<u64>(&result);q.payload_bytes=sizeof(result);q.provider_status=result.status;return ai_ipc(q);}
++bool submit_action(const ai_action::Request& request,ai_action::Result& result) noexcept{gui::AiServiceIpc q{};q.worker=gui::AiWorkerCommand::ActionSubmit;q.action_request=request;if(!ai_ipc(q))return false;result=q.action_result;return true;}
++bool worker_poll(gui::AiServiceIpc& q) noexcept{q={};q.worker=gui::AiWorkerCommand::Poll;q.payload=reinterpret_cast<u64>(g_pending_prompt.text);q.payload_capacity=sizeof(g_pending_prompt.text);if(!ai_ipc(q))return false;if(q.task==gui::AiWorkerTask::SubmitProvider){g_pending_prompt.bytes=q.payload_bytes;if(g_pending_prompt.bytes<=ai_provider::MaxPromptBytes)g_pending_prompt.text[g_pending_prompt.bytes]=0;}return true;}
+ ai_service::FileReadResult read_path(void*,const char* path,usize path_bytes,u64 offset,void* dst,usize cap,usize& got) noexcept {
+-    syscall::FileRangeReadRequest q{};q.path=path;q.path_length=path_bytes;q.offset=offset;q.buffer=static_cast<char*>(dst);q.capacity=cap;
+-    const u64 transport=trinity_user_syscall(syscall::ReadFileRange,reinterpret_cast<u64>(&q));got=q.bytes_read;if(!transport)return ai_service::FileReadResult::Error;
+-    const auto result=static_cast<storage::Result>(q.result);if(result==storage::Result::NotFound)return ai_service::FileReadResult::NotFound;if(result==storage::Result::Success||result==storage::Result::EndOfFile)return ai_service::FileReadResult::Ok;return ai_service::FileReadResult::Error;
++ syscall::FileRangeReadRequest q{};q.path=path;q.path_length=path_bytes;q.offset=offset;q.buffer=static_cast<char*>(dst);q.capacity=cap;const u64 transport=trinity_user_syscall(syscall::ReadFileRange,reinterpret_cast<u64>(&q));got=q.bytes_read;if(!transport)return ai_service::FileReadResult::Error;const auto result=static_cast<storage::Result>(q.result);if(result==storage::Result::NotFound)return ai_service::FileReadResult::NotFound;if(result==storage::Result::Success||result==storage::Result::EndOfFile)return ai_service::FileReadResult::Ok;return ai_service::FileReadResult::Error;
++}
++void fetch_cancel() noexcept{if(!g_fetch_request_id)return;syscall::NetworkFetchCancelRequest q{};q.request_id=g_fetch_request_id;(void)trinity_user_syscall(syscall::NetworkFetchCancel,reinterpret_cast<u64>(&q));g_fetch_request_id=0;}
++bool fetch_ollama(ai_service::Service& service,bool& deferred_probe) noexcept{
++ syscall::NetworkFetchStartRequest start{};copy_text(start.url,sizeof(start.url),g_http_request.url);start.url_length=text_len(start.url);start.flags=network::FetchRequestPost;start.body=g_http_request.body;start.body_length=g_http_request.body_bytes;copy_text(start.content_type,sizeof(start.content_type),g_http_request.content_type);
++ if(!trinity_user_syscall(syscall::NetworkFetchStart,reinterpret_cast<u64>(&start))||!start.request_id){g_provider_result.status=ai_provider::Status::TransportError;return false;}g_fetch_request_id=start.request_id;usize total=0;
++ for(u32 spins=0;spins<200000u;++spins){
++  gui::AiServiceIpc ipc{};if(worker_poll(ipc)){if(ipc.flags)deferred_probe=true;if(ipc.task==gui::AiWorkerTask::CancelProvider){fetch_cancel();ai_provider::cancel(service.provider);g_provider_result={};g_provider_result.status=ai_provider::Status::Cancelled;return false;}}
++  syscall::NetworkFetchPollRequest poll{};poll.request_id=g_fetch_request_id;poll.body_offset=total;if(total<ai_provider::MaxResponseBytes){poll.body=g_response+total;usize cap=ai_provider::MaxResponseBytes-total;if(cap>4096u)cap=4096u;poll.body_capacity=cap;}
++  if(!trinity_user_syscall(syscall::NetworkFetchPoll,reinterpret_cast<u64>(&poll))){__asm__ volatile("pause":::"memory");continue;}
++  if(poll.body_bytes_copied){total+=poll.body_bytes_copied;if(total>ai_provider::MaxResponseBytes){fetch_cancel();g_provider_result.status=ai_provider::Status::InvalidResponse;return false;}}
++  if(poll.status.state==network::FetchState::Failed){g_fetch_request_id=0;g_provider_result.status=ai_provider::Status::TransportError;g_provider_result.error=static_cast<u32>(poll.status.error);return false;}
++  if(poll.status.state==network::FetchState::Complete&&(poll.status.body_bytes==0u||total>=poll.status.body_bytes)){
++   g_fetch_request_id=0;if(poll.status.http_status<200u||poll.status.http_status>=300u){g_provider_result.status=ai_provider::Status::TransportError;g_provider_result.error=poll.status.http_status;return false;}
++   if(!ai_provider::consume_response(service.provider,g_response,total,g_provider_result))return false;return true;
++  }
++  __asm__ volatile("pause":::"memory");
++ }
++ fetch_cancel();g_provider_result.status=ai_provider::Status::TransportError;g_provider_result.error=static_cast<u32>(network::FetchError::Timeout);return false;
++}
++void handle_task(ai_service::Service& service,const gui::AiServiceIpc& q,bool& deferred_probe) noexcept{
++ if(q.task==gui::AiWorkerTask::ConfigureProvider){g_provider_result={};(void)ai_provider::configure_remote(service.provider,q.endpoint);g_provider_result.status=ai_provider::status(service.provider);service.provider_result=g_provider_result;(void)publish_provider_result(g_provider_result);return;}
++ if(q.task==gui::AiWorkerTask::CancelProvider){fetch_cancel();ai_provider::cancel(service.provider);g_provider_result={};g_provider_result.status=ai_provider::Status::Cancelled;service.provider_result=g_provider_result;(void)publish_provider_result(g_provider_result);return;}
++ if(q.task!=gui::AiWorkerTask::SubmitProvider)return;
++ g_provider_result={};if(!ai_provider::submit(service.provider,q.provider_id,g_pending_prompt,g_http_request,g_provider_result)){service.provider_result=g_provider_result;(void)publish_provider_result(g_provider_result);return;}
++ bool ok=q.provider_id==ai_action::ProviderId::RemoteOllama?fetch_ollama(service,deferred_probe):false;
++ if(!ok)ai_provider::cancel(service.provider);
++ if(!ok&&g_provider_result.status==ai_provider::Status::Busy)g_provider_result.status=ai_provider::Status::TransportError;
++ if(g_provider_result.has_action){ai_action::Result ar{};if(submit_action(g_provider_result.action,ar))service.action_result=ar;else{g_provider_result.status=ai_provider::Status::InvalidResponse;g_provider_result.error=1u;}}
++ service.provider_result=g_provider_result;(void)publish_provider_result(g_provider_result);
+ }
+ }
+ extern "C" [[noreturn,gnu::section(".text")]] void _start(){using namespace trinity;
+-    gui::Message ready{};ready.operation=gui::Operation::AppReady;if(!gui_request(ready))for(;;)__asm__ volatile("pause":::"memory");
+-    ai_service::Service service{};ai_service::initialize(service);ai_service::FileAccess access{nullptr,&read_path};(void)ai_service::probe_active_model(service,access);(void)publish_status(service);
+-    for(;;){for(u32 i=0;i<1024u;++i)__asm__ volatile("pause":::"memory");if(probe_requested()){(void)ai_service::probe_active_model(service,access);(void)publish_status(service);}}
++ gui::Message ready{};ready.operation=gui::Operation::AppReady;if(!gui_request(ready))for(;;)__asm__ volatile("pause":::"memory");
++ ai_service::Service service{};ai_service::initialize(service);ai_service::FileAccess access{nullptr,&read_path};(void)ai_service::probe_active_model(service,access);(void)publish_status(service);bool deferred_probe=false;
++ for(;;){for(u32 i=0;i<1024u;++i)__asm__ volatile("pause":::"memory");gui::AiServiceIpc q{};if(!worker_poll(q))continue;if(q.flags)deferred_probe=true;handle_task(service,q,deferred_probe);if(deferred_probe&&!service.provider.active){deferred_probe=false;(void)ai_service::probe_active_model(service,access);(void)publish_status(service);}}
+ }
