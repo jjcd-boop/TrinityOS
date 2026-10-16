@@ -1,0 +1,81 @@
+diff --git a/src/kernel/syscall.cpp b/src/kernel/syscall.cpp
+index 9a79514..dbad4dc 100644
+--- a/src/kernel/syscall.cpp
++++ b/src/kernel/syscall.cpp
+@@ -65,8 +65,10 @@ std::atomic<u8> g_first_run_present_seen{0u};
+ // tab's response, and a dead tab is reclaimed before the next dispatch.
+ constexpr u32 DesktopFetchBrokerOwner = 0xfffffffeu;
+ constexpr u32 DesktopFetchBrokerSlots = 4u;
+-constexpr u32 BrowserFetchBrokerSlots = gui::BrowserTabCount + DesktopFetchBrokerSlots;
++constexpr u32 AiFetchBrokerSlots = 1u;
++constexpr u32 BrowserFetchBrokerSlots = gui::BrowserTabCount + DesktopFetchBrokerSlots + AiFetchBrokerSlots;
+ constexpr usize BrowserFetchPostBytes = 768u;
++constexpr usize AiFetchPostBytes = 32u*1024u;
+ enum class BrowserFetchBrokerState:u32 {Free=0,Queued=1,Active=2,Terminal=3};
+ struct BrowserFetchBrokerSlot {
+     BrowserFetchBrokerState state{BrowserFetchBrokerState::Free};
+@@ -76,9 +78,11 @@ struct BrowserFetchBrokerSlot {
+     u64 network_request_id{0};
+     NetworkFetchStartRequest request{};
+     network::FetchStatus terminal_status{};
+-    u8 post_body[BrowserFetchPostBytes]{};
++    u8 post_body[AiFetchPostBytes]{};
+ };
+ alignas(64) BrowserFetchBrokerSlot g_browser_fetch_broker[BrowserFetchBrokerSlots]{};
++alignas(64) u8 g_ai_fetch_post_bounce[AiFetchPostBytes]{};
++std::atomic<u32> g_ai_fetch_post_bounce_lock{0u};
+ std::atomic<u32> g_browser_fetch_broker_lock{0u};
+ u64 g_browser_fetch_broker_generation=0u;
+ i32 g_browser_fetch_active=-1;
+@@ -109,6 +113,8 @@ static bool browser_fetch_lock(){
+     return false;
+ }
+ static void browser_fetch_unlock(){g_browser_fetch_broker_lock.store(0u,std::memory_order_release);}
++static bool ai_fetch_post_bounce_acquire(){for(u32 spin=0;spin<256u;++spin){u32 expected=0u;if(g_ai_fetch_post_bounce_lock.compare_exchange_weak(expected,1u,std::memory_order_acq_rel,std::memory_order_acquire))return true;__asm__ volatile("pause");}return false;}
++static void ai_fetch_post_bounce_release(){g_ai_fetch_post_bounce_lock.store(0u,std::memory_order_release);}
+ static void browser_fetch_clear(BrowserFetchBrokerSlot& s){s=BrowserFetchBrokerSlot{};}
+ static bool browser_fetch_enqueue_cancel(u32 owner,u64 owner_generation,u64 client_request_id){
+     for(auto& pending:g_browser_fetch_pending_cancel){
+@@ -142,13 +148,16 @@ static void browser_fetch_status_text(network::FetchStatus& st,const char* msg){
+ static bool fetch_broker_caller(u32& owner,u64& generation){
+     if(auto* pcb=process::current_control_block()){
+         if(pcb->legacy_id==process::Id::Desktop){owner=DesktopFetchBrokerOwner;generation=pcb->generation.load(std::memory_order_acquire);return process::execution_allowed(*pcb);}
++        if(pcb->legacy_id==process::Id::AiService){owner=gui::AiService;generation=gui::app_generation(gui::AiService);return process::execution_allowed(*pcb)&&generation!=0u;}
+     }
+     const u32 app=gui::current_app_id();
++    if(gui::ai_service(app)){owner=gui::AiService;generation=gui::app_generation(app);return generation!=0u;}
+     if(!gui::browser_family(app))return false;
+     owner=app;generation=gui::app_generation(app);return generation!=0u;
+ }
+ static bool fetch_broker_owner_alive(u32 owner,u64 generation){
+     if(owner==DesktopFetchBrokerOwner){const auto* pcb=process::control_block_const(process::Id::Desktop);return pcb&&process::execution_allowed(*pcb)&&pcb->generation.load(std::memory_order_acquire)==generation;}
++    if(gui::ai_service(owner))return gui::app_running(owner)&&gui::app_generation(owner)==generation;
+     return gui::browser_family(owner)&&gui::app_running(owner)&&gui::app_generation(owner)==generation;
+ }
+ static void browser_fetch_reap_dead_locked(){
+@@ -1748,15 +1757,21 @@ static u64 handle_network_fetch_start(u64 argument,u64*) {
+     NetworkFetchStartRequest request{};if(!read_object(argument,request))return 0;
+     request.url[sizeof(request.url)-1]=0;request.content_type[sizeof(request.content_type)-1]=0;request.cookie[sizeof(request.cookie)-1]=0;request.referer[sizeof(request.referer)-1]=0;request.if_none_match[sizeof(request.if_none_match)-1]=0;request.if_modified_since[sizeof(request.if_modified_since)-1]=0;request.request_id=0;request.reserved=0;
+     usize n=request.url_length;if(n>=sizeof(request.url))n=sizeof(request.url)-1;request.url_length=n;
+-    u8 post_body[BrowserFetchPostBytes]{};usize body_bytes=request.body_length;if(body_bytes){if(body_bytes>BrowserFetchPostBytes||!request.body||!validate_user_pages(request.body,body_bytes,false)||!copy_from_user(post_body,request.body,body_bytes)){request.reserved=static_cast<u32>(network::FetchError::Http);(void)write_object(argument,request);return 0;}}
+     u32 owner=0xffffffffu;u64 owner_generation=0u;if(!fetch_broker_caller(owner,owner_generation)){request.reserved=static_cast<u32>(network::FetchError::Busy);(void)write_object(argument,request);return 0;}
+-    if(!browser_fetch_lock()){request.reserved=static_cast<u32>(network::FetchError::Busy);(void)write_object(argument,request);return 0;}
++    const usize post_limit=owner==gui::AiService?AiFetchPostBytes:BrowserFetchPostBytes;
++    const usize body_bytes=request.body_length;bool post_locked=false;
++    if(body_bytes){
++        if(body_bytes>post_limit||!request.body||!validate_user_pages(request.body,body_bytes,false)){request.reserved=static_cast<u32>(network::FetchError::Http);(void)write_object(argument,request);return 0;}
++        if(!ai_fetch_post_bounce_acquire()){request.reserved=static_cast<u32>(network::FetchError::Busy);(void)write_object(argument,request);return 0;}
++        post_locked=true;if(!copy_from_user(g_ai_fetch_post_bounce,request.body,body_bytes)){ai_fetch_post_bounce_release();request.reserved=static_cast<u32>(network::FetchError::Http);(void)write_object(argument,request);return 0;}
++    }
++    if(!browser_fetch_lock()){if(post_locked)ai_fetch_post_bounce_release();request.reserved=static_cast<u32>(network::FetchError::Busy);(void)write_object(argument,request);return 0;}
+     browser_fetch_reap_dead_locked();browser_fetch_apply_pending_cancels_locked();browser_fetch_dispatch_locked();
+     const u32 owner_limit=owner==DesktopFetchBrokerOwner?DesktopFetchBrokerSlots:1u;
+-    if(browser_fetch_owner_count_locked(owner)>=owner_limit){request.reserved=static_cast<u32>(network::FetchError::Busy);browser_fetch_unlock();(void)write_object(argument,request);return 0;}
++    if(browser_fetch_owner_count_locked(owner)>=owner_limit){request.reserved=static_cast<u32>(network::FetchError::Busy);browser_fetch_unlock();if(post_locked)ai_fetch_post_bounce_release();(void)write_object(argument,request);return 0;}
+     i32 free_index=-1;for(u32 i=0;i<BrowserFetchBrokerSlots;++i)if(g_browser_fetch_broker[i].state==BrowserFetchBrokerState::Free){free_index=static_cast<i32>(i);break;}
+-    if(free_index<0){request.reserved=static_cast<u32>(network::FetchError::Busy);browser_fetch_unlock();(void)write_object(argument,request);return 0;}
+-    auto& slot=g_browser_fetch_broker[static_cast<u32>(free_index)];slot=BrowserFetchBrokerSlot{};slot.state=BrowserFetchBrokerState::Queued;slot.owner=owner;slot.owner_generation=owner_generation;u64 client=++g_browser_fetch_broker_generation;if(!client)client=++g_browser_fetch_broker_generation;slot.client_request_id=client;slot.request=request;slot.request.body=nullptr;slot.request.request_id=0;for(usize i=0;i<body_bytes;++i)slot.post_body[i]=post_body[i];request.request_id=client;request.reserved=static_cast<u32>(network::FetchError::None);browser_fetch_dispatch_locked();browser_fetch_unlock();
++    if(free_index<0){request.reserved=static_cast<u32>(network::FetchError::Busy);browser_fetch_unlock();if(post_locked)ai_fetch_post_bounce_release();(void)write_object(argument,request);return 0;}
++    auto& slot=g_browser_fetch_broker[static_cast<u32>(free_index)];slot=BrowserFetchBrokerSlot{};slot.state=BrowserFetchBrokerState::Queued;slot.owner=owner;slot.owner_generation=owner_generation;u64 client=++g_browser_fetch_broker_generation;if(!client)client=++g_browser_fetch_broker_generation;slot.client_request_id=client;slot.request=request;slot.request.body=nullptr;slot.request.request_id=0;for(usize i=0;i<body_bytes;++i)slot.post_body[i]=g_ai_fetch_post_bounce[i];request.request_id=client;request.reserved=static_cast<u32>(network::FetchError::None);browser_fetch_dispatch_locked();browser_fetch_unlock();if(post_locked)ai_fetch_post_bounce_release();
+     return write_object(argument,request)?1u:0u;
+ }
