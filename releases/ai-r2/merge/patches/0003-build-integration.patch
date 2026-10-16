@@ -1,0 +1,12 @@
+diff --git a/scripts/build.sh b/scripts/build.sh
+index 3d517f2..d3f34c9 100755
+--- a/scripts/build.sh
++++ b/scripts/build.sh
+@@ -67,6 +67,7 @@ sources=(
+   src/kernel/hotpath.cpp
+   src/kernel/context_runtime.cpp
+   src/kernel/gui_runtime.cpp
++  src/kernel/ai_action_broker.cpp
+   src/kernel/scheduler.cpp
+   src/kernel/page_alloc.cpp
+   src/kernel/mmu.cpp
