@@ -1,0 +1,67 @@
+diff --git a/src/kernel/ai_action_broker.cpp b/src/kernel/ai_action_broker.cpp
+index f5cf3d0..b3bf116 100644
+--- a/src/kernel/ai_action_broker.cpp
++++ b/src/kernel/ai_action_broker.cpp
+@@ -1,16 +1,18 @@
+ #include "trinity/ai_action_broker.hpp"
+ namespace trinity::ai_action_broker { namespace {
+-ai_action::AuditEntry ring[ai_action::AuditCapacity]{};u64 seq=0;
++ai_action::AuditEntry ring[ai_action::AuditCapacity]{};u64 seq=0;std::atomic<u32> audit_lock{0u};
++void lock_audit(){for(;;){u32 expected=0u;if(audit_lock.compare_exchange_weak(expected,1u,std::memory_order_acquire,std::memory_order_relaxed))return;__asm__ volatile("pause":::"memory");}}
++void unlock_audit(){audit_lock.store(0u,std::memory_order_release);}
+ using namespace ai_action;
+ PermissionClass expected(ActionId a){switch(a){case ActionId::BatteryStatus:case ActionId::NetworkStatus:case ActionId::NetworkDiagnostics:case ActionId::ProcessMemorySummary:case ActionId::ActionBrokerStatus:case ActionId::AuditSnapshot:return PermissionClass::ReadOnly;case ActionId::LaunchApp:case ActionId::OpenFolder:case ActionId::OpenSettings:case ActionId::AdjustVolume:case ActionId::RadioPlay:case ActionId::RadioNext:return PermissionClass::BenignControl;default:return PermissionClass::Privileged;}}
+ bool valid_app(i32 x){switch(static_cast<AppTarget>(x)){case AppTarget::Writer:case AppTarget::Calculator:case AppTarget::Explorer:case AppTarget::Settings:case AppTarget::Browser:case AppTarget::Media:case AppTarget::Games:case AppTarget::Sheets:case AppTarget::Slides:case AppTarget::Notes:return true;default:return false;}}
+ bool valid_folder(i32 x){return x>=static_cast<i32>(FolderTarget::Home)&&x<=static_cast<i32>(FolderTarget::Downloads);}
+ bool valid_settings(i32 x){return x>=static_cast<i32>(SettingsSection::General)&&x<=static_cast<i32>(SettingsSection::AI);}
+-void log(const Request&r,const Context&c,const Result&o){const u64 n=++seq;auto&e=ring[(n-1u)%ai_action::AuditCapacity];e.sequence=n;e.timestamp=c.timestamp;e.provider=c.provider;e.action=r.action;e.permission=r.permission;e.disposition=o.disposition;e.detail=o.detail;e.caller=static_cast<u32>(c.caller);}
++void log(const Request&r,const Context&c,const Result&o){lock_audit();const u64 n=++seq;auto&e=ring[(n-1u)%ai_action::AuditCapacity];e.sequence=n;e.timestamp=c.timestamp;e.provider=c.provider;e.action=r.action;e.permission=r.permission;e.disposition=o.disposition;e.detail=o.detail;e.caller=static_cast<u32>(c.caller);unlock_audit();}
+ Result finish(const Request&r,const Context&c,Result o){o.request_id=r.request_id;o.action=r.action;log(r,c,o);return o;}
+ }
+-void reset_audit() noexcept {for(auto&e:ring)e=ai_action::AuditEntry{};seq=0;}
+-ai_action::AuditSnapshot audit_snapshot() noexcept {ai_action::AuditSnapshot s{};s.latest_sequence=seq;s.count=seq<ai_action::AuditCapacity?static_cast<u32>(seq):ai_action::AuditCapacity;const u64 first=seq>s.count?seq-s.count:0;for(u32 i=0;i<s.count;++i)s.entries[i]=ring[(first+i)%ai_action::AuditCapacity];return s;}
++void reset_audit() noexcept {lock_audit();for(auto&e:ring)e=ai_action::AuditEntry{};seq=0;unlock_audit();}
++ai_action::AuditSnapshot audit_snapshot() noexcept {lock_audit();ai_action::AuditSnapshot s{};s.latest_sequence=seq;s.count=seq<ai_action::AuditCapacity?static_cast<u32>(seq):ai_action::AuditCapacity;const u64 first=seq>s.count?seq-s.count:0;for(u32 i=0;i<s.count;++i)s.entries[i]=ring[(first+i)%ai_action::AuditCapacity];unlock_audit();return s;}
+ ai_action::Result execute(const ai_action::Request&r,const Context&c,const Hooks&h) noexcept {using namespace ai_action;Result o{};o.action=r.action;o.request_id=r.request_id;
+  if(r.version!=ContractVersion||r.provider!=c.provider){o.disposition=Disposition::Invalid;return finish(r,c,o);} if(c.provider_originated&&c.caller!=process::Id::AiService){o.disposition=Disposition::Denied;return finish(r,c,o);}if(r.permission==PermissionClass::Privileged){o.disposition=Disposition::Denied;return finish(r,c,o);}const auto ex=expected(r.action);if(ex==PermissionClass::Privileged){o.disposition=Disposition::Invalid;return finish(r,c,o);}if(r.permission!=ex){o.disposition=Disposition::Invalid;return finish(r,c,o);}bool ok=false;bool present=true;
+  switch(r.action){case ActionId::LaunchApp:if(!valid_app(r.arg0)){o.disposition=Disposition::Invalid;return finish(r,c,o);}present=h.launch_app; if(present)ok=h.launch_app(static_cast<u32>(r.arg0),o);break;case ActionId::OpenFolder:if(!valid_folder(r.arg0)){o.disposition=Disposition::Invalid;return finish(r,c,o);}present=h.open_folder;if(present)ok=h.open_folder(static_cast<u32>(r.arg0),o);break;case ActionId::OpenSettings:if(!valid_settings(r.arg0)){o.disposition=Disposition::Invalid;return finish(r,c,o);}present=h.open_settings;if(present)ok=h.open_settings(static_cast<u32>(r.arg0),o);break;case ActionId::AdjustVolume:if(r.arg0<-25||r.arg0>25){o.disposition=Disposition::Invalid;return finish(r,c,o);}present=h.adjust_volume;if(present)ok=h.adjust_volume(r.arg0,o);break;case ActionId::BatteryStatus:present=h.battery_status;if(present)ok=h.battery_status(0,o);break;case ActionId::NetworkStatus:present=h.network_status;if(present)ok=h.network_status(0,o);break;case ActionId::NetworkDiagnostics:present=h.network_diagnostics;if(present)ok=h.network_diagnostics(0,o);break;case ActionId::ProcessMemorySummary:present=h.process_memory_summary;if(present)ok=h.process_memory_summary(0,o);break;case ActionId::RadioPlay:present=h.radio_play;if(present)ok=h.radio_play(0,o);break;case ActionId::RadioNext:present=h.radio_next;if(present)ok=h.radio_next(0,o);break;case ActionId::ActionBrokerStatus:{auto s=audit_snapshot();o.value0=s.count;o.value1=s.latest_sequence;ok=true;break;}case ActionId::AuditSnapshot:{auto s=audit_snapshot();o.value0=s.count;o.value1=s.latest_sequence;ok=true;break;}default:o.disposition=Disposition::Invalid;return finish(r,c,o);}o.disposition=!present?Disposition::Unsupported:(ok?Disposition::Allowed:Disposition::Failed);return finish(r,c,o); }
+
+diff --git a/src/user/ai_provider_ollama.cpp b/src/user/ai_provider_ollama.cpp
+index 8a01f8b..faeaf01 100644
+--- a/src/user/ai_provider_ollama.cpp
++++ b/src/user/ai_provider_ollama.cpp
+@@ -23,5 +23,5 @@ i32 folder_value(const char*s){using namespace ai_action;if(eq(s,"Home"))return
+ i32 settings_value(const char*s){using namespace ai_action;if(eq(s,"General"))return (i32)SettingsSection::General;if(eq(s,"Network"))return (i32)SettingsSection::Network;if(eq(s,"Power"))return (i32)SettingsSection::Power;if(eq(s,"Mouse"))return (i32)SettingsSection::Mouse;if(eq(s,"Display"))return (i32)SettingsSection::Display;if(eq(s,"Audio"))return (i32)SettingsSection::Audio;if(eq(s,"AI"))return (i32)SettingsSection::AI;return 0;}
+ }
+ Status build_ollama_request(const RemoteEndpoint&e,const Request&q,char*out,usize cap,usize&bytes) noexcept {bytes=0;if(!out||cap<64u||q.prompt_bytes>MaxPromptBytes)return Status::InvalidRequest;Writer w{out,cap,0};w.str("{\"model\":\"");w.esc(e.model,[] (const char*s){usize n=0;while(s[n])++n;return n;}(e.model));w.str("\",\"messages\":[{\"role\":\"user\",\"content\":\"");w.esc(q.prompt,q.prompt_bytes);w.str("\"}]");w.str(Tools);w.str(",\"stream\":false}");if(!w.ok||w.n>MaxRequestBytes)return Status::InvalidRequest;bytes=w.n;return Status::Ok;}
+-Status parse_ollama_response(const char*d,usize n,Result&r) noexcept {r=Result{};if(!d)return Status::MalformedResponse;if(n>MaxResponseBytes)return Status::ResponseTooLarge;char name[64]{};if(find(d,n,"\"tool_calls\"")){if(!get_string_after(d,n,"\"name\"",name,sizeof(name)))return Status::MalformedResponse;if(!map_name(name,r.action))return Status::UnsupportedTool;r.has_action=true;r.action.request_id=1;char v[64]{};using ai_action::ActionId;switch(r.action.action){case ActionId::LaunchApp:if(!get_string_after(d,n,"\"app\"",v,sizeof(v))||(r.action.arg0=app_value(v))==0)return Status::MalformedResponse;break;case ActionId::OpenFolder:if(!get_string_after(d,n,"\"folder\"",v,sizeof(v))||(r.action.arg0=folder_value(v))==0)return Status::MalformedResponse;break;case ActionId::OpenSettings:if(!get_string_after(d,n,"\"section\"",v,sizeof(v))||(r.action.arg0=settings_value(v))==0)return Status::MalformedResponse;break;case ActionId::AdjustVolume:if(!get_int_after(d,n,"\"delta\"",r.action.arg0)||r.action.arg0<-25||r.action.arg0>25)return Status::MalformedResponse;break;default:break;}r.status=Status::Ok;return Status::Ok;}if(!get_string_after(d,n,"\"content\"",r.text,sizeof(r.text)))return Status::MalformedResponse;r.status=Status::Ok;return Status::Ok;}
++Status parse_ollama_response(const char*d,usize n,Result&r) noexcept {r=Result{};if(!d)return Status::MalformedResponse;if(n>MaxResponseBytes)return Status::ResponseTooLarge;char name[64]{};const char* tools=find(d,n,"\"tool_calls\"");if(tools){const usize tools_n=n-static_cast<usize>(tools-d);const char* first_function=find(tools,tools_n,"\"function\"");if(!first_function)return Status::MalformedResponse;const usize after_first=n-static_cast<usize>(first_function-d);if(find(first_function,after_first,"\"function\""))return Status::UnsupportedTool;if(!get_string_after(tools,tools_n,"\"name\"",name,sizeof(name)))return Status::MalformedResponse;if(!map_name(name,r.action))return Status::UnsupportedTool;r.has_action=true;r.action.request_id=1;char v[64]{};using ai_action::ActionId;switch(r.action.action){case ActionId::LaunchApp:if(!get_string_after(first_function,after_first,"\"app\"",v,sizeof(v))||(r.action.arg0=app_value(v))==0)return Status::MalformedResponse;break;case ActionId::OpenFolder:if(!get_string_after(first_function,after_first,"\"folder\"",v,sizeof(v))||(r.action.arg0=folder_value(v))==0)return Status::MalformedResponse;break;case ActionId::OpenSettings:if(!get_string_after(first_function,after_first,"\"section\"",v,sizeof(v))||(r.action.arg0=settings_value(v))==0)return Status::MalformedResponse;break;case ActionId::AdjustVolume:if(!get_int_after(first_function,after_first,"\"delta\"",r.action.arg0)||r.action.arg0<-25||r.action.arg0>25)return Status::MalformedResponse;break;default:break;}r.status=Status::Ok;return Status::Ok;}if(!get_string_after(d,n,"\"content\"",r.text,sizeof(r.text)))return Status::MalformedResponse;r.status=Status::Ok;return Status::Ok;}
+ }
+
+diff --git a/tests/ai_r2_audit_concurrency_static.py b/tests/ai_r2_audit_concurrency_static.py
+new file mode 100755
+index 0000000..580f99e
+--- /dev/null
++++ b/tests/ai_r2_audit_concurrency_static.py
+@@ -0,0 +1,7 @@
++#!/usr/bin/env python3
++from pathlib import Path
++s=(Path(__file__).resolve().parents[1]/'src/kernel/ai_action_broker.cpp').read_text()
++assert 'std::atomic<u32> audit_lock' in s, 'audit ring must have an atomic lock'
++assert 'compare_exchange_weak' in s, 'audit lock must use atomic compare/exchange'
++assert 'audit_lock.store(0u,std::memory_order_release)' in s, 'audit lock must release with release ordering'
++print('ai_r2_audit_concurrency_static: PASS')
+
+diff --git a/tests/ai_r2_provider_host.cpp b/tests/ai_r2_provider_host.cpp
+index d6b0768..0059f2f 100644
+--- a/tests/ai_r2_provider_host.cpp
++++ b/tests/ai_r2_provider_host.cpp
+@@ -14,6 +14,7 @@ int main(){
+  const char* text="{\"message\":{\"content\":\"network looks healthy\"}}";assert(ai_provider::begin(s,ai_action::ProviderId::RemoteOllama,q,body,sizeof(body),n)==ai_provider::Status::Ok);assert(ai_provider::finish(s,text,std::strlen(text),r)==ai_provider::Status::Ok);assert(!r.has_action&&std::strstr(r.text,"network looks healthy"));
+  const char* badtool="{\"message\":{\"tool_calls\":[{\"function\":{\"name\":\"execute_shell\",\"arguments\":{}}}]}}";assert(ai_provider::begin(s,ai_action::ProviderId::RemoteOllama,q,body,sizeof(body),n)==ai_provider::Status::Ok);assert(ai_provider::finish(s,badtool,std::strlen(badtool),r)==ai_provider::Status::UnsupportedTool);assert(!s.busy);
+  assert(ai_provider::begin(s,ai_action::ProviderId::RemoteOllama,q,body,sizeof(body),n)==ai_provider::Status::Ok);ai_provider::transport_failed(s);assert(!s.busy);assert(ai_provider::begin(s,ai_action::ProviderId::RemoteOllama,q,body,sizeof(body),n)==ai_provider::Status::Ok);ai_provider::cancel(s);assert(!s.busy);
++ const char* twotool="{\"message\":{\"tool_calls\":[{\"function\":{\"name\":\"trinity_battery_status\",\"arguments\":{}}},{\"function\":{\"name\":\"trinity_network_status\",\"arguments\":{}}}]}}";assert(ai_provider::begin(s,ai_action::ProviderId::RemoteOllama,q,body,sizeof(body),n)==ai_provider::Status::Ok);assert(ai_provider::finish(s,twotool,std::strlen(twotool),r)==ai_provider::Status::UnsupportedTool);assert(!s.busy);
+  ai_provider::State local{};assert(ai_provider::begin(local,ai_action::ProviderId::LocalFunctionGemma,q,body,sizeof(body),n)==ai_provider::Status::RuntimeUnavailable);
+  ai_provider::RemoteEndpoint bad{};bad.enabled=true;std::strcpy(bad.host,"user@host");std::strcpy(bad.model,"x");assert(ai_provider::configure_remote(s,bad)==ai_provider::Status::InvalidEndpoint);
+  std::puts("ai_r2_provider_host: PASS");
+ }
