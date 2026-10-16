@@ -1,49 +1,65 @@
-# Trinity AI R2 — Action Broker + Remote Provider
+# Trinity AI Action Broker / Remote Provider R2 — Final Qualified Release Notes
 
-## What R2 adds
+**Date:** 2026-10-16
 
-R2 adds the controlled operating-system action layer that sits between an AI provider and Trinity services. Models never receive a generic shell, arbitrary syscall execution, arbitrary file paths, or direct device authority.
+R2 adds Trinity's bounded AI action/control plane on top of the qualified FunctionGemma R1 foundation. The native production direction remains **AISVC + ggml/llama + FunctionGemma**. The optional `RemoteOllama` provider exists only to exercise the provider/action path against a capable model during development.
 
-The release includes:
+## Added
 
-- Versioned `AIActionRequest` / `AIActionResult` contracts.
-- A kernel-side allow-listed AI Action Broker.
-- A 128-entry in-memory audit ring.
-- Read-only status actions for battery, network, network diagnostics, process-memory summary, broker status, and audit status.
-- Bounded benign controls for approved app launch, approved folders, Settings launch, volume adjustment, Internet Radio play, and Internet Radio next.
+- Fixed `AIActionRequest` / result / audit contracts.
+- Kernel AI Action Broker with explicit caller, provider-origin, permission and argument validation.
+- Fixed allow-listed actions for read-only status and benign controls.
+- 128-entry RAM audit history with atomic synchronization.
+- Typed adapters to existing Trinity app, power, network, audio and Internet Radio services.
+- AISVC-only bounded network fetch authority; Browser limits are unchanged.
+- Separate AISVC POST allowance capped at 32 KiB.
 - Provider abstraction for `LocalFunctionGemma` and optional `RemoteOllama`.
-- A bounded Ring-3 remote Ollama `/api/chat` adapter using `stream:false` and exact known tool names.
-- AISVC v2 IPC for provider configuration, prompt submission, provider polling/cancellation, action submission/results, broker status, and audit snapshots.
-- Conflict-aware R2 merge tooling with preflight hashes, rollback copies, and refusal on source drift.
+- Remote `/api/chat` request builder/parser using `stream:false`.
+- Exact tool mapping: unknown tools and responses containing multiple tool calls are rejected.
+- AISVC v2 bounded IPC and prompt/result mailboxes.
+- Provider cancel/transport-failure recovery.
 
-## Ollama is not part of Trinity
+## Security boundaries
 
-Ollama remains an optional development backend running on another computer over the LAN. R2 does not contain the Ollama executable, Go runtime, Ollama model store, or an Ollama model.
+The model/provider never receives arbitrary syscall or command execution authority. R2 does not expose arbitrary executable names, arbitrary filesystem paths, shell execution, filesystem mutation, raw network/device control, shutdown/reboot or other privileged/destructive actions.
 
-The production local direction remains:
+AISVC is not granted `NetworkControl`, filesystem-write, process-control, USB/device-control, audio-control or power-control capabilities. It uses the Action Broker to request specific allow-listed operations.
 
-`Trinity -> AISVC -> native ggml/llama runtime -> FunctionGemma`
+## Independence from other active Trinity work
 
-Local FunctionGemma inference is intentionally still reported as `RuntimeUnavailable` in R2. Native inference is the next runtime phase.
+R2 does not modify the exFAT/filesystem implementation, Desktop/Search/Start assistant UI, or Baofeng/amateur-radio mesh implementation. Internet Radio actions refer only to Trinity's existing media/Internet Radio controls.
 
-## Security boundary
+## Final hardening
 
-The model can request only enumerated actions. R2 exposes no privileged/destructive action. Privileged requests are denied by the broker, unknown remote tool names are rejected before the broker, and provider-originated actions must come from `process::Id::AiService` with a matching provider identity.
+Final whole-change self-review found and fixed two Important issues before qualification:
 
-Browser networking is not widened: Browser POST remains capped at 768 bytes. AISVC alone receives a separate 32 KiB request allowance for the bounded remote-provider request. The staging buffer is static/lock-protected rather than placed on the kernel stack.
+1. The RAM audit ring is now explicitly serialized with a kernel-safe atomic lock.
+2. Remote provider responses containing more than one tool call are rejected instead of executing the first action.
 
-## Branch isolation
+All R1 and R2 regressions were rerun after these fixes.
 
-R2 does not modify Trinity filesystem implementation, exFAT/TFS code, Baofeng/mesh code, Desktop implementation, or the Settings application implementation. The audit log is RAM-only in this release.
+## Final qualification
 
-R2 requires the FunctionGemma R1 preparation layer first. Automatic application intentionally refuses to modify a tree if the R1 merge seams have drifted; this protects newer filesystem/desktop work from blind patching.
+Fresh source path: original R84 -> exact qualified R1 package -> final R2 package.
 
-## Qualification
+- R1 regression/static suite: PASS
+- R2 Action Broker ASan/UBSan: PASS
+- R2 provider ASan/UBSan: PASS
+- R2 diagnostic/security ASan/UBSan: PASS
+- Audit synchronization static gate: PASS
+- R2 integration static gate: PASS
+- AISVC ELF verification: PASS
+- Full Trinity build: exit 0
+- `Artifact verification: PASS`
 
-The exact merge package was qualified by applying exact R1 to a fresh R84 extraction and then applying R2. The R2 package passed its drift/refusal matrix, host tests under ASan/UBSan with warnings-as-errors, AISVC ELF verification, and a complete Trinity build with `Artifact verification: PASS`.
+AISVC: 47,744 bytes, 3 PT_LOAD segments, SHA-256 `61f0f5a773f706e26cac56c26a921c300352f706199ceea5641ae1f9308bb51b`.
 
-Hardware LAN communication with a real Ollama server remains a hardware-test item.
+BOOTX64.EFI SHA-256: `1811ee4769bc232b1f5a9234ec017bea38995b0e989711abd50c9d2b537a027a`.
 
-## Next phase
+USB image SHA-256: `0bfde01ce990ef87ba0d794af8a10a067ce346c78ed443fc03b3aa5caddf9d45`.
 
-R3 should begin the native Trinity ggml/llama platform layer: allocator/alignment, CPU feature detection, worker threading, timing, cancellation/watchdog support, and the minimal CPU backend required to load and execute FunctionGemma without Ollama.
+Final R2 merge ZIP SHA-256: `42fbaf4def2ef49cba72de7c950c964999aefe89aaee37ae6706fc8229906e79`.
+
+## Remaining runtime validation
+
+The optional RemoteOllama path still requires a real LAN hardware round trip from Trinity to a reachable external Ollama server. Native FunctionGemma inference is intentionally not part of R2; `LocalFunctionGemma` reports `RuntimeUnavailable` until the native inference runtime is ported.
