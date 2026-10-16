@@ -1,51 +1,78 @@
-Trinity AI Action Broker + Remote Provider R2 - verification record
+TRINITY AI ACTION BROKER / REMOTE PROVIDER R2
+FINAL VERIFICATION RECORD
+Date: 2026-10-16
 
-Baseline: TrinityOS_R84_BROWSER_COMPLETENESS_SOURCE_CANDIDATE.zip + exact TRINITY_FUNCTIONGEMMA_PREP_MERGE_R1.zip
-Verification method: apply exact R1 to a fresh R84 extraction, then apply the exact R2 package and run host/static/sanitizer tests, build AISVC, and run full scripts/build.sh.
+BASELINE
+- Original source: TrinityOS_R84_BROWSER_COMPLETENESS_SOURCE_CANDIDATE.zip
+- Prerequisite: exact qualified TRINITY_FUNCTIONGEMMA_PREP_MERGE_R1.zip
+- Delivery: conflict-aware R2 merge package
 
-Fresh R84 -> exact R1 apply: PASS
-R2 merge checker on exact R1 baseline: SAFE TO APPLY
-Exact R2 apply: PASS
-Second R2 apply refusal before edits: PASS (exit 2, MANUAL INTEGRATION REQUIRED)
-Merge checker drift/collision regression matrix: PASS
-Bash/PowerShell pre-mutation apply ordering checks: PASS
-R1 host regressions: PASS
-R2 Action Broker host tests with ASan+UBSan and -Wall -Wextra -Werror: PASS
-R2 remote-provider host tests with ASan+UBSan and -Wall -Wextra -Werror: PASS
-R2 deterministic provider -> broker -> action -> audit diagnostic: PASS
-R2 IPC layout/static security invariants: PASS
-AISVC ELF: PASS
-AISVC bytes: 53848
-AISVC SHA-256: bda06f52752742620fa056abb1f85d4dd134898703063ef4fd9fff6477a23099
-AISVC unresolved symbols: none
-Full Trinity build exit: 0
-Artifact verification: PASS
-BOOTX64.EFI bytes: 14877696
-BOOTX64.EFI SHA-256: 5c60137dd49fe9be05c99c4ed1320da004571649abc42d5604b0a8227fc283aa
-USB image bytes: 134217728
-USB image SHA-256: 3de9603179bce5355dcbebb3fc266ebc7503552067aad0afcd19fa1b3a15a701
-Changed source/test files vs R1 baseline: 20
-FunctionGemma/GGUF payload files in R2 package: 0
-Files larger than 10 MiB in R2 package before ZIP: 0
-Filesystem implementation files changed by R2: 0
-Baofeng/mesh implementation files changed by R2: 0
-Desktop implementation files changed by R2: 0
-Settings application implementation files changed by R2: 0
+FINAL FRESH-TREE QUALIFICATION
+- Fresh R84 extraction: PASS
+- Exact R1 merge application: PASS
+- Exact R2 merge application: PASS
+- R2 second-apply refusal: PASS (MANUAL INTEGRATION REQUIRED)
+- R1 regression/static tests: PASS
+- R2 Action Broker ASan/UBSan: PASS
+- R2 provider ASan/UBSan: PASS
+- R2 diagnostic/security ASan/UBSan: PASS
+- R2 audit synchronization static gate: PASS
+- R2 integration static gate: PASS
+- AISVC freestanding ELF verification: PASS
+- Full Trinity build exit code: 0
+- Full Trinity Artifact verification: PASS
 
-Security boundaries verified:
-- R2 privileged action requests are denied by the Action Broker.
-- Provider-originated requests are accepted only from process::Id::AiService with a matching non-None provider identity.
-- Unknown Ollama tool names are rejected before the Action Broker.
-- Browser POST allowance remains 768 bytes; only AISVC receives the separate 32 KiB bounded POST allowance.
-- The 32 KiB AISVC POST staging buffer is global/static and lock-protected, not allocated on the kernel stack.
-- Remote Ollama is disabled until explicitly configured and uses one bounded request at a time.
-- FunctionGemma remains the intended local production provider; R2 local inference still reports RuntimeUnavailable until the native ggml/llama runtime is implemented.
-- No Ollama executable, Go runtime, Ollama model store, or GGUF model is included.
+FINAL BUILD ARTIFACTS
+AISVC.ELF
+- Size: 47,744 bytes
+- PT_LOAD segments: 3
+- Image pages: 53
+- SHA-256: 61f0f5a773f706e26cac56c26a921c300352f706199ceea5641ae1f9308bb51b
+- Unresolved symbols: none
 
-Hardware qualification still required:
-- Actual LAN POST to an Ollama server from Trinity hardware.
-- End-to-end real service actions (launch, network/power/audio/radio) on target hardware.
+BOOTX64.EFI
+- Size: 14,866,944 bytes
+- SHA-256: 1811ee4769bc232b1f5a9234ec017bea38995b0e989711abd50c9d2b537a027a
 
-Review note:
-- Final whole-change review was author self-review because this harness has no independent coding/reviewer subagent.
-- Deferred minor: AuditEntry.timestamp is currently a monotonic audit sequence marker rather than calibrated wall-clock time. It preserves ordering; wall-clock/TSC integration can be added when the native time-service contract is stabilized.
+trinity-usb-x86_64.img
+- Size: 134,217,728 bytes
+- SHA-256: 0bfde01ce990ef87ba0d794af8a10a067ce346c78ed443fc03b3aa5caddf9d45
+
+FINAL MERGE ZIP
+- Size: 149,674 bytes
+- Entries: 59
+- ZIP integrity: PASS
+- SHA-256: 42fbaf4def2ef49cba72de7c950c964999aefe89aaee37ae6706fc8229906e79
+
+SECURITY / SCOPE
+- Browser POST remains 768 bytes: PASS
+- AISVC POST allowance separately bounded at 32 KiB: PASS
+- AISVC one-owned-fetch limit: PASS
+- Unknown remote tool rejected: PASS
+- Multiple remote tool calls rejected: PASS
+- Transport failure clears provider busy state: PASS
+- Spoofed/non-AISVC provider-origin request denied and audited: PASS
+- 128-entry audit ring protected by atomic synchronization: PASS
+- No arbitrary shell/command execution interface: PASS
+- No arbitrary filesystem-path action: PASS
+- No filesystem mutation authority added to AISVC: PASS
+- No raw NetworkControl/device-control authority added to AISVC: PASS
+- Desktop/Search/Start UI source unchanged by R2: PASS
+- exFAT/filesystem implementation unchanged by R2: PASS
+- Baofeng/amateur-radio mesh implementation unchanged by R2: PASS
+
+PAYLOAD EXCLUSIONS
+- GGUF/model weights in R2 package: 0
+- Ollama executable/runtime in R2 package: 0
+- Go runtime in R2 package: 0
+- Ollama model store in R2 package: 0
+
+FINAL REVIEW
+- Whole-change review: self-review (no independent subagent tool available)
+- Important fixed: audit ring synchronization
+- Important fixed: reject multi-tool provider responses
+- Full regression/qualification rerun after fixes: PASS
+
+RUNTIME VALIDATION BOUNDARY
+- RemoteOllama still requires a real Trinity LAN hardware test against a reachable external Ollama server.
+- Native FunctionGemma inference is not part of R2; LocalFunctionGemma reports RuntimeUnavailable.
