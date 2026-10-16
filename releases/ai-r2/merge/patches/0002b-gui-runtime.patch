@@ -1,0 +1,148 @@
+diff --git a/src/kernel/gui_runtime.cpp b/src/kernel/gui_runtime.cpp
+index c8f2024..6ad08d0 100644
+--- a/src/kernel/gui_runtime.cpp
++++ b/src/kernel/gui_runtime.cpp
+@@ -19,6 +19,9 @@
+ #include "trinity/nucleus_health.hpp"
+ #include "trinity/js_service.hpp"
+ #include "trinity/ai_service.hpp"
++#include "trinity/ai_action_broker.hpp"
++#include "trinity/audio.hpp"
++#include "trinity/power.hpp"
+ #include "trinity/browser_script_ipc.hpp"
+ namespace trinity::gui {
+ namespace {
+@@ -73,6 +76,13 @@ std::atomic<u32> browser_script_lock{0};
+ browser_script::Broker browser_script_broker{};
+ std::atomic<u32> ai_status_lock{0},ai_probe_pending{0};
+ ai_protocol::Status ai_status{};
++std::atomic<u32> ai_mailbox_lock{0};
++gui::AiWorkerTask ai_worker_task=gui::AiWorkerTask::None;
++ai_provider::RemoteEndpoint ai_remote_endpoint{};
++ai_action::ProviderId ai_pending_provider=ai_action::ProviderId::RemoteOllama;
++char ai_prompt_mailbox[ai_provider::MaxPromptBytes+1]{};u32 ai_prompt_bytes=0;
++ai_provider::Result ai_provider_result{};bool ai_provider_result_ready=false;bool ai_provider_inflight=false;
++ai_action::Result ai_last_action_result{};
+ bool browser_script_owner(Slot* slot,browser_script::Endpoint& endpoint,u32& tab) noexcept {
+  if(!slot)return false;
+  if(browser_family(slot->id)){endpoint=browser_script::Endpoint::Browser;tab=browser_tab_index(slot->id);return tab<BrowserTabCount;}
+@@ -499,7 +509,7 @@ Result start(Slot& s,u32 id,i32 w,i32 h,bool prepared=false){
+   s.py=static_cast<i32>(s.height.load(std::memory_order_acquire)/2u);
+  }
+  hotpath::initialize_domain(s.caps,domain,3,0,1);
+- for(u64 n=syscall::FirstSyscall;n<=syscall::LastSyscall;++n){const bool ai_worker=ai_service(id);bool allowed=ai_worker?(n==syscall::GuiRuntime||n==syscall::QueryUserCs||n==syscall::ReadFileRange):((id==ForgeRunner||js_worker(id))?(n==syscall::GuiRuntime||n==syscall::QueryUserCs):(n==syscall::GuiRuntime||n==syscall::QueryUserCs||n==syscall::ScreenWidth||n==syscall::ScreenHeight||n==syscall::PollKey||n==syscall::PollPointer||n==syscall::PointerAvailable||n==syscall::DrawRect||n==syscall::DrawBorder||n==syscall::DrawText||n==syscall::DrawHLine||n==syscall::DrawModernText||n==syscall::BlendRect||n==syscall::BeginFrame||n==syscall::PresentFrame||n==syscall::PresentRect||n==syscall::GetSettings||n==syscall::GetClock||n==syscall::WriteFileSession||n==syscall::DrawStyledText||n==syscall::DrawBitmap||n==syscall::DrawBitmapRgba||n==syscall::ReadFile||n==syscall::ListDirectory||n==syscall::TakePendingDocument||n==syscall::GetNetwork||n==syscall::GetAudio||n==syscall::GetGpu||n==syscall::GetHardware||n==syscall::GetPower||n==syscall::GetPowerDiagnostics||n==syscall::GetUsb||n==syscall::GetPrelive||n==syscall::GetContainment||n==syscall::GetCapabilities||n==syscall::QueryProcess||n==syscall::SetPendingDocument||n==syscall::CreateDirectory||n==syscall::RenamePath||n==syscall::DeletePath));
++ for(u64 n=syscall::FirstSyscall;n<=syscall::LastSyscall;++n){const bool ai_worker=ai_service(id);bool allowed=ai_worker?(n==syscall::GuiRuntime||n==syscall::QueryUserCs||n==syscall::ReadFileRange||n==syscall::NetworkFetchStart||n==syscall::NetworkFetchPoll||n==syscall::NetworkFetchCancel):((id==ForgeRunner||js_worker(id))?(n==syscall::GuiRuntime||n==syscall::QueryUserCs):(n==syscall::GuiRuntime||n==syscall::QueryUserCs||n==syscall::ScreenWidth||n==syscall::ScreenHeight||n==syscall::PollKey||n==syscall::PollPointer||n==syscall::PointerAvailable||n==syscall::DrawRect||n==syscall::DrawBorder||n==syscall::DrawText||n==syscall::DrawHLine||n==syscall::DrawModernText||n==syscall::BlendRect||n==syscall::BeginFrame||n==syscall::PresentFrame||n==syscall::PresentRect||n==syscall::GetSettings||n==syscall::GetClock||n==syscall::WriteFileSession||n==syscall::DrawStyledText||n==syscall::DrawBitmap||n==syscall::DrawBitmapRgba||n==syscall::ReadFile||n==syscall::ListDirectory||n==syscall::TakePendingDocument||n==syscall::GetNetwork||n==syscall::GetAudio||n==syscall::GetGpu||n==syscall::GetHardware||n==syscall::GetPower||n==syscall::GetPowerDiagnostics||n==syscall::GetUsb||n==syscall::GetPrelive||n==syscall::GetContainment||n==syscall::GetCapabilities||n==syscall::QueryProcess||n==syscall::SetPendingDocument||n==syscall::CreateDirectory||n==syscall::RenamePath||n==syscall::DeletePath));
+   // Writer, Draw, Sheets, and Forge receive the asynchronous durable-file capabilities.  The
+   // legacy synchronous WriteFile syscall intentionally remains unavailable to
+   // GUI domains so a syscall cannot spin while waiting on Ring-3 FSSVC.
+@@ -588,6 +598,48 @@ bool cpu0_launch_fallback_due(){
+  return false;
+ }
+ }
++namespace {
++bool ai_hook_launch(void*,ai_action::AppTarget target){
++ const u32 id=ai_action_broker::app_slot(target);if(!id||id>=SlotCount)return false;
++ return queue_private_launch(slots[id],id,960,640,nullptr)==Result::Ok;
++}
++bool ai_hook_folder(void*,ai_action::FolderTarget target){
++ const char* path=ai_action_broker::folder_path(target);if(!path)return false;
++ constexpr u32 ExplorerSlot=3u;return queue_private_launch(slots[ExplorerSlot],ExplorerSlot,960,640,path)==Result::Ok;
++}
++bool ai_hook_settings(void*,ai_action::SettingsSection target){
++ if(!ai_action_broker::settings_section_code(target))return false;
++ constexpr u32 SettingsSlot=4u;return queue_private_launch(slots[SettingsSlot],SettingsSlot,960,640,nullptr)==Result::Ok;
++}
++bool ai_hook_battery(void*,u64& a,u64& b){
++ power::Snapshot p{};if(!power::read_snapshot(p))return false;a=p.percent;
++ b=(u64(p.valid)<<0)|(u64(p.present)<<1)|(u64(p.ac_connected)<<2)|(u64(p.charging)<<3);return true;
++}
++bool ai_hook_network(void*,bool diagnostics,u64& a,u64& b){
++ const auto& n=network::snapshot();a=(u64(n.wired_link_up)<<0)|(u64(n.ipv4_ready)<<1)|(u64(n.dns_ready)<<2)|(u64(n.internet_live)<<3)|(u64(n.ax200_present)<<4);
++ if(diagnostics){const auto q=network::qualification_status();b=(u64(static_cast<u32>(q.state))<<32)|static_cast<u32>(q.error);}else b=n.gate_state;return true;
++}
++bool ai_hook_process_memory(void*,u64& a,u64& b){
++ u64 best_bytes=0;u32 best_id=0;
++ for(u32 id=1;id<SlotCount;++id){Slot& slot=slots[id];if(static_cast<State>(slot.state.load(std::memory_order_acquire))==State::Empty)continue;
++  if(vm::VmSpace* space=vm::lookup(slot.image.address_space)){const u64 bytes=space->anonymous_resident_pages.load(std::memory_order_acquire)*mmu::PageSize;if(bytes>best_bytes){best_bytes=bytes;best_id=id;}}}
++ a=best_id;b=best_bytes;return true;
++}
++bool ai_hook_volume(void*,i32 delta,u64& out){
++ i32 target=static_cast<i32>(audio::volume())+delta;if(target<0)target=0;if(target>100)target=100;
++ if(!audio::control(7u,static_cast<u32>(target)))return false;out=static_cast<u64>(target);return true;
++}
++bool ai_hook_radio(void*,bool next){
++ if(!acquire(radio_lock))return false;const u32 command=next?2u:3u;
++ if(radio_command){release(radio_lock);return false;}radio_command=command;release(radio_lock);return true;
++}
++ai_action_broker::Hooks ai_hooks(){
++ ai_action_broker::Hooks h{};h.launch_app=ai_hook_launch;h.open_folder=ai_hook_folder;h.open_settings=ai_hook_settings;h.battery_status=ai_hook_battery;h.network_status=ai_hook_network;h.process_memory_summary=ai_hook_process_memory;h.adjust_volume=ai_hook_volume;h.radio=ai_hook_radio;return h;
++}
++}
++ai_action::Result execute_ai_action(const ai_action::Request& request,const ai_action_broker::Context& context) noexcept{return ai_action_broker::execute(request,context,ai_hooks());}
++ai_action::AuditSnapshot ai_action_audit_snapshot() noexcept{return ai_action_broker::audit_snapshot();}
++
+ bool service_background_launch(){
+  const u32 cpu=scheduler::current_cpu_strict();
+  if(cpu==scheduler::NoCpu||cpu==0u)return false;
+@@ -1230,15 +1282,55 @@ u64 control(u64 arg){Message m{};if(!syscall::copy_from_user(&m,reinterpret_cast
+   if(!me||!m.payload||!syscall::copy_from_user(&q,reinterpret_cast<void*>(m.payload),sizeof(q))||q.version!=AiServiceIpcVersion){m.result=Result::Invalid;return syscall::copy_to_user(reinterpret_cast<void*>(arg),&m,sizeof(m))?1:0;}
+   q.result=Result::Denied;
+   if(me->id==AiService){
+-   if(q.worker==AiWorkerCommand::PublishStatus){if(!acquire(ai_status_lock))q.result=Result::Busy;else{ai_status=q.status;release(ai_status_lock);q.result=Result::Ok;}}
+-   else if(q.worker==AiWorkerCommand::Poll){q.flags=ai_probe_pending.exchange(0u,std::memory_order_acq_rel);q.result=Result::Ok;}
+-   else q.result=Result::Denied;
++   if(q.worker==AiWorkerCommand::PublishStatus){
++    if(!acquire(ai_status_lock))q.result=Result::Busy;else{ai_status=q.status;release(ai_status_lock);q.result=Result::Ok;}
++   } else if(q.worker==AiWorkerCommand::Poll){
++    q.flags=ai_probe_pending.exchange(0u,std::memory_order_acq_rel);
++    if(!acquire(ai_mailbox_lock))q.result=Result::Busy;
++    else {
++     q.task=ai_worker_task;q.endpoint=ai_remote_endpoint;q.provider_id=ai_pending_provider;q.payload_bytes=0;
++     bool copied=true;
++     if(q.task==AiWorkerTask::SubmitProvider){
++      if(!q.payload||q.payload_capacity<ai_prompt_bytes+1u)copied=false;
++      else copied=syscall::copy_to_user(reinterpret_cast<void*>(q.payload),ai_prompt_mailbox,ai_prompt_bytes+1u);
++      if(copied)q.payload_bytes=ai_prompt_bytes;
++     }
++     if(copied){ai_worker_task=AiWorkerTask::None;q.result=Result::Ok;}else q.result=Result::Invalid;
++     release(ai_mailbox_lock);
++    }
++   } else if(q.worker==AiWorkerCommand::PublishProviderResult){
++    if(!q.payload||q.payload_bytes!=sizeof(ai_provider::Result))q.result=Result::Invalid;
++    else if(!acquire(ai_mailbox_lock))q.result=Result::Busy;
++    else {ai_provider::Result incoming{};if(!syscall::copy_from_user(&incoming,reinterpret_cast<void*>(q.payload),sizeof(incoming)))q.result=Result::Invalid;else{ai_provider_result=incoming;ai_provider_result_ready=true;ai_provider_inflight=false;q.provider_status=incoming.status;q.result=Result::Ok;}release(ai_mailbox_lock);}
++   } else if(q.worker==AiWorkerCommand::ActionSubmit){
++    const ai_action_broker::Context context{q.action_request.provider,process::Id::AiService,true};
++    q.action_result=execute_ai_action(q.action_request,context);ai_last_action_result=q.action_result;q.result=Result::Ok;
++   } else q.result=Result::Denied;
+   } else {
+    const bool client=me->id==static_cast<u32>(process::Id::Desktop)||me->id==static_cast<u32>(process::Id::Settings)||me->id==static_cast<u32>(process::Id::Console);
+    if(client){Slot& worker=slots[AiService];
+-    if(q.action==ai_protocol::Action::Ensure||q.action==ai_protocol::Action::ProbeModel){const auto st=static_cast<State>(worker.state.load(std::memory_order_acquire));if(st==State::Empty)q.result=queue_private_launch(worker,AiService,0,0,nullptr);else if(st==State::Starting||st==State::Running)q.result=Result::Ok;else q.result=Result::Busy;if(q.action==ai_protocol::Action::ProbeModel&&q.result==Result::Ok)ai_probe_pending.store(1u,std::memory_order_release);}
+-    else if(q.action==ai_protocol::Action::Retire){const auto st=static_cast<State>(worker.state.load(std::memory_order_acquire));worker.close.store(1u,std::memory_order_release);worker.close_tsc.store(trinity_rdtsc(),std::memory_order_release);u32 pending=LaunchQueued;const bool cancelled=worker.launch_pending.compare_exchange_strong(pending,LaunchNone,std::memory_order_acq_rel,std::memory_order_acquire);if(cancelled||st==State::Empty){worker.launch_phase.store(static_cast<u32>(LaunchPhase::None),std::memory_order_release);worker.close.store(0u,std::memory_order_release);worker.state.store(static_cast<u32>(State::Empty),std::memory_order_release);}else{worker.thread.retirement_requested.store(1u,std::memory_order_release);const auto ts=static_cast<scheduler::ThreadState>(worker.thread.state.load(std::memory_order_acquire));if(ts!=scheduler::ThreadState::Running)(void)scheduler::terminate(worker.thread);worker.state.store(static_cast<u32>(State::Retiring),std::memory_order_release);scheduler::configure_budget(worker.thread,scheduler::BudgetClass::Background,policy_quantum());}q.result=Result::Ok;}
+-    else if(q.action==ai_protocol::Action::Status){q.result=Result::Ok;}
++    if(q.worker==AiWorkerCommand::Client){
++     if(q.action==ai_protocol::Action::Ensure||q.action==ai_protocol::Action::ProbeModel){const auto st=static_cast<State>(worker.state.load(std::memory_order_acquire));if(st==State::Empty)q.result=queue_private_launch(worker,AiService,0,0,nullptr);else if(st==State::Starting||st==State::Running)q.result=Result::Ok;else q.result=Result::Busy;if(q.action==ai_protocol::Action::ProbeModel&&q.result==Result::Ok)ai_probe_pending.store(1u,std::memory_order_release);}
++     else if(q.action==ai_protocol::Action::Retire){const auto st=static_cast<State>(worker.state.load(std::memory_order_acquire));worker.close.store(1u,std::memory_order_release);worker.close_tsc.store(trinity_rdtsc(),std::memory_order_release);u32 pending=LaunchQueued;const bool cancelled=worker.launch_pending.compare_exchange_strong(pending,LaunchNone,std::memory_order_acq_rel,std::memory_order_acquire);if(cancelled||st==State::Empty){worker.launch_phase.store(static_cast<u32>(LaunchPhase::None),std::memory_order_release);worker.close.store(0u,std::memory_order_release);worker.state.store(static_cast<u32>(State::Empty),std::memory_order_release);}else{worker.thread.retirement_requested.store(1u,std::memory_order_release);const auto ts=static_cast<scheduler::ThreadState>(worker.thread.state.load(std::memory_order_acquire));if(ts!=scheduler::ThreadState::Running)(void)scheduler::terminate(worker.thread);worker.state.store(static_cast<u32>(State::Retiring),std::memory_order_release);scheduler::configure_budget(worker.thread,scheduler::BudgetClass::Background,policy_quantum());}q.result=Result::Ok;}
++     else if(q.action==ai_protocol::Action::Status)q.result=Result::Ok;
++    } else if(q.worker==AiWorkerCommand::ProviderConfigure){
++     if(q.endpoint.host[ai_provider::MaxHostBytes]!=0||q.endpoint.model[ai_provider::MaxModelBytes]!=0)q.result=Result::Invalid;
++     else if(!acquire(ai_mailbox_lock))q.result=Result::Busy;
++     else {if(ai_provider_inflight||ai_worker_task!=AiWorkerTask::None)q.result=Result::Busy;else{ai_remote_endpoint=q.endpoint;ai_worker_task=AiWorkerTask::ConfigureProvider;q.result=Result::Ok;}release(ai_mailbox_lock);}
++    } else if(q.worker==AiWorkerCommand::ProviderSubmit){
++     if(!q.payload||!q.payload_bytes||q.payload_bytes>ai_provider::MaxPromptBytes||(q.provider_id!=ai_action::ProviderId::RemoteOllama&&q.provider_id!=ai_action::ProviderId::LocalFunctionGemma))q.result=Result::Invalid;
++     else if(!acquire(ai_mailbox_lock))q.result=Result::Busy;
++     else {if(ai_provider_inflight||ai_worker_task!=AiWorkerTask::None)q.result=Result::Busy;else if(!syscall::copy_from_user(ai_prompt_mailbox,reinterpret_cast<void*>(q.payload),q.payload_bytes)){q.result=Result::Invalid;}else{ai_prompt_mailbox[q.payload_bytes]=0;ai_prompt_bytes=q.payload_bytes;ai_pending_provider=q.provider_id;ai_provider_result_ready=false;ai_provider_inflight=true;ai_worker_task=AiWorkerTask::SubmitProvider;q.result=Result::Ok;}release(ai_mailbox_lock);}
++    } else if(q.worker==AiWorkerCommand::ProviderPoll){
++     if(!acquire(ai_mailbox_lock))q.result=Result::Busy;
++     else {q.provider_status=ai_provider_result_ready?ai_provider_result.status:(ai_provider_inflight?ai_provider::Status::Busy:ai_provider::Status::Ready);if(ai_provider_result_ready){if(!q.payload||q.payload_capacity<sizeof(ai_provider::Result)||!syscall::copy_to_user(reinterpret_cast<void*>(q.payload),&ai_provider_result,sizeof(ai_provider_result)))q.result=Result::Invalid;else{q.payload_bytes=sizeof(ai_provider::Result);q.result=Result::Ok;}}else q.result=Result::NotReady;release(ai_mailbox_lock);}
++    } else if(q.worker==AiWorkerCommand::ProviderCancel){
++     if(!acquire(ai_mailbox_lock))q.result=Result::Busy;else{ai_worker_task=AiWorkerTask::CancelProvider;ai_provider_inflight=true;q.result=Result::Ok;release(ai_mailbox_lock);}
++    } else if(q.worker==AiWorkerCommand::ActionSubmit){
++     q.action_request.provider=ai_action::ProviderId::None;const ai_action_broker::Context context{ai_action::ProviderId::None,static_cast<process::Id>(me->id),false};q.action_result=execute_ai_action(q.action_request,context);ai_last_action_result=q.action_result;q.result=Result::Ok;
++    } else if(q.worker==AiWorkerCommand::ActionPoll){q.action_result=ai_last_action_result;q.result=Result::Ok;}
++    else if(q.worker==AiWorkerCommand::BrokerStatus){ai_action::Request r{};r.provider=ai_action::ProviderId::None;r.action=ai_action::ActionId::ActionBrokerStatus;r.permission=ai_action::PermissionClass::ReadOnly;const ai_action_broker::Context context{ai_action::ProviderId::None,static_cast<process::Id>(me->id),false};q.action_result=execute_ai_action(r,context);q.result=Result::Ok;}
++    else if(q.worker==AiWorkerCommand::AuditSnapshot){auto snapshot=ai_action_audit_snapshot();if(!q.payload||q.payload_capacity<sizeof(snapshot)||!syscall::copy_to_user(reinterpret_cast<void*>(q.payload),&snapshot,sizeof(snapshot)))q.result=Result::Invalid;else{q.payload_bytes=sizeof(snapshot);q.result=Result::Ok;}}
+     q.generation=worker.generation.load(std::memory_order_acquire);q.state=static_cast<State>(worker.state.load(std::memory_order_acquire));q.error=static_cast<Error>(worker.error.load(std::memory_order_acquire));if(acquire(ai_status_lock)){q.status=ai_status;release(ai_status_lock);}
+    }
+   }
