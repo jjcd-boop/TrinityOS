@@ -1,0 +1,51 @@
+Trinity AI Action Broker + Remote Provider R2 - verification record
+
+Baseline: TrinityOS_R84_BROWSER_COMPLETENESS_SOURCE_CANDIDATE.zip + exact TRINITY_FUNCTIONGEMMA_PREP_MERGE_R1.zip
+Verification method: apply exact R1 to a fresh R84 extraction, then apply the exact R2 package and run host/static/sanitizer tests, build AISVC, and run full scripts/build.sh.
+
+Fresh R84 -> exact R1 apply: PASS
+R2 merge checker on exact R1 baseline: SAFE TO APPLY
+Exact R2 apply: PASS
+Second R2 apply refusal before edits: PASS (exit 2, MANUAL INTEGRATION REQUIRED)
+Merge checker drift/collision regression matrix: PASS
+Bash/PowerShell pre-mutation apply ordering checks: PASS
+R1 host regressions: PASS
+R2 Action Broker host tests with ASan+UBSan and -Wall -Wextra -Werror: PASS
+R2 remote-provider host tests with ASan+UBSan and -Wall -Wextra -Werror: PASS
+R2 deterministic provider -> broker -> action -> audit diagnostic: PASS
+R2 IPC layout/static security invariants: PASS
+AISVC ELF: PASS
+AISVC bytes: 53848
+AISVC SHA-256: bda06f52752742620fa056abb1f85d4dd134898703063ef4fd9fff6477a23099
+AISVC unresolved symbols: none
+Full Trinity build exit: 0
+Artifact verification: PASS
+BOOTX64.EFI bytes: 14877696
+BOOTX64.EFI SHA-256: 5c60137dd49fe9be05c99c4ed1320da004571649abc42d5604b0a8227fc283aa
+USB image bytes: 134217728
+USB image SHA-256: 3de9603179bce5355dcbebb3fc266ebc7503552067aad0afcd19fa1b3a15a701
+Changed source/test files vs R1 baseline: 20
+FunctionGemma/GGUF payload files in R2 package: 0
+Files larger than 10 MiB in R2 package before ZIP: 0
+Filesystem implementation files changed by R2: 0
+Baofeng/mesh implementation files changed by R2: 0
+Desktop implementation files changed by R2: 0
+Settings application implementation files changed by R2: 0
+
+Security boundaries verified:
+- R2 privileged action requests are denied by the Action Broker.
+- Provider-originated requests are accepted only from process::Id::AiService with a matching non-None provider identity.
+- Unknown Ollama tool names are rejected before the Action Broker.
+- Browser POST allowance remains 768 bytes; only AISVC receives the separate 32 KiB bounded POST allowance.
+- The 32 KiB AISVC POST staging buffer is global/static and lock-protected, not allocated on the kernel stack.
+- Remote Ollama is disabled until explicitly configured and uses one bounded request at a time.
+- FunctionGemma remains the intended local production provider; R2 local inference still reports RuntimeUnavailable until the native ggml/llama runtime is implemented.
+- No Ollama executable, Go runtime, Ollama model store, or GGUF model is included.
+
+Hardware qualification still required:
+- Actual LAN POST to an Ollama server from Trinity hardware.
+- End-to-end real service actions (launch, network/power/audio/radio) on target hardware.
+
+Review note:
+- Final whole-change review was author self-review because this harness has no independent coding/reviewer subagent.
+- Deferred minor: AuditEntry.timestamp is currently a monotonic audit sequence marker rather than calibrated wall-clock time. It preserves ordering; wall-clock/TSC integration can be added when the native time-service contract is stabilized.
