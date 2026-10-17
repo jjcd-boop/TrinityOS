@@ -1,6 +1,6 @@
 # Trinity OS
 
-Trinity OS is an independently developed x86-64 operating-system project.
+Trinity OS is an independently developed x86-64 operating-system project. It aims to become a microkernel, with native amateur radio and artificial intelligence support. 
 
 ## Current milestone
 
