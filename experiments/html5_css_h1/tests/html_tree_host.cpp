@@ -152,7 +152,7 @@ int main() {
         check(second!=NONE && eq(doc.get(second)->name,"div"),"sibling after comment");
     }
     {
-        start("</p>tail");
+        start("<body></p>tail");
         uint16_t p=child(doc.body_index(),"p");
         check(p!=NONE && first(p)==NONE && has_text(next(p),"tail"),
               "unmatched end p synthesizes empty p");
