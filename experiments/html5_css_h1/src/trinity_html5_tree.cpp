@@ -538,25 +538,64 @@ bool TreeBuilder::close_list_item(const char* name) noexcept {
     return false;
 }
 bool TreeBuilder::ensure_table_context(const char* name) noexcept {
-    if(!equal(name,"tr") && !equal(name,"td") && !equal(name,"th")) return true;
-    size_t table=0;
+    const bool group = equal(name,"tbody") || equal(name,"thead") ||
+                       equal(name,"tfoot") || equal(name,"caption") ||
+                       equal(name,"colgroup");
+    const bool row=equal(name,"tr");
+    const bool cell=equal(name,"td") || equal(name,"th");
+    if(!group && !row && !cell)return true;
+    // All three table "clear the stack back to ... context" variants are
+    // restricted to the *innermost* table. For example <table><b><tr>
+    // must pop the misnested b before creating the implied tbody.
+    size_t table_pos=depth_;
     for(size_t i=depth_;i>1;--i) {
-        if(equal(nodes_[open_[i-1]].name,"table")) { table=i;break; }
+        if(equal(nodes_[open_[i-1]].name,"table")){table_pos=i-1;break;}
+        if(equal(nodes_[open_[i-1]].name,"template"))return true;
     }
-    if(!table) return true;
-    bool rowgroup=false;
-    bool row=false;
-    for(size_t i=table;i<depth_;++i) {
+    if(table_pos==depth_)return true;
+    size_t group_pos=depth_,row_pos=depth_;
+    for(size_t i=table_pos+1;i<depth_;++i) {
         const char* tag=nodes_[open_[i]].name;
-        if(equal(tag,"thead")||equal(tag,"tbody")||equal(tag,"tfoot")) rowgroup=true;
-        if(equal(tag,"tr")) row=true;
+        if(equal(tag,"tbody")||equal(tag,"thead")||equal(tag,"tfoot"))
+            group_pos=i;
+        if(equal(tag,"tr"))row_pos=i;
     }
-    if(!rowgroup) {
-        uint16_t id=create(NodeKind::Element,open_[depth_-1],"tbody",nullptr,true);
-        if(!push(id))return false;
+    if(group) {
+        // In-table insertion of a new row group/caption/colgroup clears
+        // formatting and stale open cells back to the table itself.
+        depth_=table_pos+1;
+        return true;
     }
-    if((equal(name,"td")||equal(name,"th")) && !row) {
-        uint16_t id=create(NodeKind::Element,open_[depth_-1],"tr",nullptr,true);
+    // For a row, clear back to an existing row group (table-body mode)
+    // or to the table (in-table mode, which implies tbody).
+    if(row){
+        depth_=(group_pos<depth_?group_pos:table_pos)+1;
+        // group_pos is an index in the original stack; detect its presence
+        // using the actual top of the now truncated stack.
+        if(!equal(nodes_[open_[depth_-1]].name,"tbody") &&
+           !equal(nodes_[open_[depth_-1]].name,"thead") &&
+           !equal(nodes_[open_[depth_-1]].name,"tfoot")){
+            const uint16_t id=create(NodeKind::Element,open_[depth_-1],
+                                     "tbody",nullptr,true);
+            if(!push(id))return false;
+        }
+        return true;
+    }
+    // For a cell, clear to the current row. If there is no row, HTML
+    // constructs an implied row group and then an implied row.
+    if(row_pos<depth_)depth_=row_pos+1;
+    else if(group_pos<depth_)depth_=group_pos+1;
+    else depth_=table_pos+1;
+    if(!equal(nodes_[open_[depth_-1]].name,"tr")){
+        if(!equal(nodes_[open_[depth_-1]].name,"tbody") &&
+           !equal(nodes_[open_[depth_-1]].name,"thead") &&
+           !equal(nodes_[open_[depth_-1]].name,"tfoot")){
+            const uint16_t id=create(NodeKind::Element,open_[depth_-1],
+                                     "tbody",nullptr,true);
+            if(!push(id))return false;
+        }
+        const uint16_t id=create(NodeKind::Element,open_[depth_-1],
+                                 "tr",nullptr,true);
         if(!push(id))return false;
     }
     return true;
@@ -637,8 +676,10 @@ bool TreeBuilder::in_body(const Token& t) noexcept {
     if(t.kind==Kind::Text){
         // Reconstruct formatting elements after misnested closes, retaining
         // the HTML active-formatting list across ordinary block boundaries.
-        uint16_t foster_parent=open_[depth_-1], before=NO;
-        if(!foster_location(foster_parent,before) && !reconstruct_formatting())
+        // In-table text requires reconstruction of active formatting *before*
+        // choosing the foster location. That is why <table><b><tr>...
+        // ...</tr>text reconstructs a second b before the table.
+        if(!whitespace_only(t.text,t.text_len) && !reconstruct_formatting())
             return false;
         return append_token_text(t);
     }
