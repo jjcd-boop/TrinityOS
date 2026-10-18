@@ -12,6 +12,8 @@ void TreeBuilder::reset() noexcept {
     html_ = head_ = body_ = NO;
     mode_ = Mode::BeforeHtml;
     active_count_=0;
+    pending_table_len_=0;
+    pending_table_active_=false;
     error_ = BuildError::None;
 }
 bool TreeBuilder::equal(const char* a, const char* b) noexcept {
@@ -499,6 +501,67 @@ bool TreeBuilder::foster_location(uint16_t& parent, uint16_t& before) const noex
     }
     return false;
 }
+bool TreeBuilder::table_text_context() const noexcept {
+    if(depth_<=1)return false;
+    const char* current=nodes_[open_[depth_-1]].name;
+    return equal(current,"table") || equal(current,"tbody") ||
+           equal(current,"thead") || equal(current,"tfoot") ||
+           equal(current,"tr");
+}
+bool TreeBuilder::collect_table_text(const Token& t) noexcept {
+    pending_table_active_=true;
+    // NUL tokens are parse errors and ignored in the HTML in-table-text mode.
+    // Tokens can be split at the H1 tokenizer's 1024-byte output bound.
+    for(size_t i=0;i<t.text_len;++i) {
+        const char c=t.text[i];
+        if(c=='\0')continue;
+        if(pending_table_len_>=kPendingTableTextLimit){
+            error_=BuildError::TokenOverflow;
+            return false;
+        }
+        pending_table_text_[pending_table_len_++]=c;
+    }
+    return true;
+}
+bool TreeBuilder::flush_table_text() noexcept {
+    if(!pending_table_active_)return true;
+    pending_table_active_=false;
+    const size_t n=pending_table_len_;
+    pending_table_len_=0;
+    if(!n)return true;
+    const bool mixed=!whitespace_only(pending_table_text_,n);
+    uint16_t parent=open_[depth_-1],before=NO;
+    if(mixed){
+        // Reprocess the *entire* pending run through in-body with foster
+        // parenting. This preserves spaces at the beginning of a later
+        // non-whitespace run, unlike flushing each Tokenizer chunk alone.
+        if(!reconstruct_formatting())return false;
+        parent=open_[depth_-1];
+        foster_location(parent,before);
+    }
+    return append_text(parent,pending_table_text_,n,before);
+}
+bool TreeBuilder::table_open_in_scope() const noexcept {
+    for(size_t i=depth_;i>1;--i) {
+        const char* tag=nodes_[open_[i-1]].name;
+        if(equal(tag,"table"))return true;
+        if(equal(tag,"template"))return false;
+    }
+    return false;
+}
+bool TreeBuilder::close_caption_context() noexcept {
+    // Scope-bound caption closing: do not pop beyond innermost table.
+    for(size_t i=depth_;i>1;--i) {
+        const char* tag=nodes_[open_[i-1]].name;
+        if(equal(tag,"caption")){
+            depth_=i-1;
+            active_clear_marker();
+            return true;
+        }
+        if(equal(tag,"table") || equal(tag,"template"))return false;
+    }
+    return false;
+}
 bool TreeBuilder::append_token_text(const Token& t) noexcept {
     if (t.text_len==0) return true;
     uint16_t parent=open_[depth_-1],before=NO;
@@ -689,15 +752,16 @@ bool TreeBuilder::end_body_tag(const Token& t) noexcept {
 }
 bool TreeBuilder::in_body(const Token& t) noexcept {
     if(t.kind==Kind::Text){
-        // Reconstruct formatting elements after misnested closes, retaining
-        // the HTML active-formatting list across ordinary block boundaries.
-        // In-table text requires reconstruction of active formatting *before*
-        // choosing the foster location. That is why <table><b><tr>...
-        // ...</tr>text reconstructs a second b before the table.
+        // The "in table text" mode queues all adjacent character tokens,
+        // even when H1 split them into bounded chunks. Mixed runs are then
+        // foster-parented as a unit; all-whitespace runs remain in the table.
+        if(pending_table_active_ || table_text_context())
+            return collect_table_text(t);
         if(!whitespace_only(t.text,t.text_len) && !reconstruct_formatting())
             return false;
         return append_token_text(t);
     }
+    if(!flush_table_text())return false;
     if(t.kind==Kind::Comment)return append_comment(t);
     if(t.kind==Kind::StartTag)return start_body_tag(t);
     if(t.kind==Kind::EndTag)return end_body_tag(t);
@@ -769,6 +833,7 @@ bool TreeBuilder::build(const char* source,size_t length) noexcept {
     for(size_t i=0;i<kMaxTokens;++i) {
         const Token t=tok.next();
         if(t.kind==Kind::Eof) {
+            if(!flush_table_text())return false;
             if(html_==NO && !enter_html(nullptr))return false;
             if(head_==NO && !enter_head(nullptr))return false;
             if(body_==NO && !enter_body(nullptr))return false;
