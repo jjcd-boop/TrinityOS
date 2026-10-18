@@ -79,7 +79,7 @@ jobs:
             experiments/html5_css_h1/tests/html_block_closure_h3c3_host.cpp \
             -o /tmp/trinity_html_blocks_h3c3
           /tmp/trinity_html_blocks_h3c3
-      - name: H3C4 live TreeBuilder 2604 nodes and quota failure tests
+      - name: H3C4 live TreeBuilder 2605 nodes and quota failure tests
         run: |
           clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -97,6 +97,28 @@ jobs:
               -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
               -Iexperiments/html5_css_h1/include "$f"
           done
+      - name: H1 through H3C1 full legacy regression matrix
+        run: |
+          INCLUDE="-Iexperiments/html5_css_h1/include"
+          BASE="experiments/html5_css_h1"
+          COMMON="$BASE/src/trinity_html5_tokenizer.cpp $BASE/src/trinity_html5_tree.cpp $BASE/src/trinity_html5_segmented_nodes.cpp"
+          for t in html_tree_host html_table_foster_host html_formatting_host \
+                   html_adoption_h3b2_host html_table_context_h3c1_host; do
+            clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              $INCLUDE $COMMON "$BASE/tests/$t.cpp" -o "/tmp/$t"
+            "/tmp/$t"
+          done
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            $INCLUDE "$BASE/src/trinity_html5_tokenizer.cpp" \
+            "$BASE/tests/html_tokenizer_host.cpp" -o /tmp/html_tokenizer_host
+          /tmp/html_tokenizer_host
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            $INCLUDE "$BASE/src/trinity_css_flow.cpp" \
+            "$BASE/tests/css_flow_host.cpp" -o /tmp/css_flow_host
+          /tmp/css_flow_host
       - uses: actions/upload-artifact@v4
         if: always()
         with:
