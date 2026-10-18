@@ -7,7 +7,7 @@ namespace trinity::html5 {
 
 enum class NodeKind : uint8_t { Document, Element, Text, Comment, Doctype };
 enum class BuildError : uint8_t {
-    None, NodeLimit, DepthLimit, AttributeLimit, TokenLimit, TokenOverflow
+    None, NodeLimit, DepthLimit, AttributeLimit, TokenLimit, TokenOverflow, FormattingLimit
 };
 
 struct TreeAttribute {
@@ -31,7 +31,7 @@ struct TreeNode {
 };
 
 // First bounded HTML5 tree-construction pass. This is NOT yet a complete
-// WHATWG tree builder (no adoption-agency, full foster parenting, templates,
+// WHATWG tree builder (limited adoption-agency, partial foster parenting, templates,
 // SVG/MathML namespaces or scripting-driven document.write).
 //
 // The large fixed node array belongs in an isolated service-owned allocation,
@@ -57,6 +57,11 @@ private:
     TreeNode nodes_[kMaxNodes]{};
     uint16_t open_[kMaxDepth]{};
     size_t count_{1}, depth_{1};
+    // A compact active-formatting list. The sentinel is also used as a marker,
+    // bounding reconstruction to the current table cell or caption.
+    static constexpr size_t kFormattingLimit = 64;
+    uint16_t active_[kFormattingLimit]{};
+    size_t active_count_{0};
     uint16_t html_{TreeNode::None};
     uint16_t head_{TreeNode::None};
     uint16_t body_{TreeNode::None};
@@ -70,9 +75,22 @@ private:
     static bool is_void(const char* name) noexcept;
     static bool is_block(const char* name) noexcept;
     static bool is_heading(const char* name) noexcept;
+    static bool is_formatting(const char* name) noexcept;
+    static bool is_special_block(const char* name) noexcept;
     uint16_t create(NodeKind kind, uint16_t parent, const char* name,
                     const Token* attrs, bool implied, uint16_t before = TreeNode::None) noexcept;
     bool push(uint16_t index) noexcept;
+    bool active_add(uint16_t node) noexcept;
+    void active_remove_at(size_t index) noexcept;
+    void active_marker() noexcept;
+    void active_clear_marker() noexcept;
+    int active_last(const char* name) const noexcept;
+    bool on_open_stack(uint16_t node, size_t* position = nullptr) const noexcept;
+    bool reconstruct_formatting() noexcept;
+    bool adopt_formatting_end(const char* name) noexcept;
+    uint16_t clone_element(uint16_t source, uint16_t parent) noexcept;
+    bool relocate(uint16_t node, uint16_t parent, uint16_t before) noexcept;
+    bool move_children(uint16_t source, uint16_t target, uint16_t except) noexcept;
     bool enter_html(const Token* original) noexcept;
     bool enter_head(const Token* original) noexcept;
     bool finish_head() noexcept;
