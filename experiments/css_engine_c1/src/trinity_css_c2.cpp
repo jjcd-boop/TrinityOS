@@ -327,7 +327,7 @@ bool StyleResolver::compute(uint16_t node,ComputedStyle& out) noexcept {
         for(size_t ri=0;ri<sheet_.count();++ri){
             const trinity::css_c1::Rule* rule=sheet_.get(ri);
             if(!rule)continue;
-            SelectorList list{};
+            SelectorList& list=scratch_;
             size_t size=0;while(rule->selector[size])++size;
             if(!list.parse(rule->selector,size))continue;
             bool matched=false;Specificity best{};
