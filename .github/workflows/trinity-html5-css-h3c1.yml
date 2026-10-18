@@ -92,3 +92,13 @@ jobs:
             -o /tmp/trinity_html_tree_dump
           python3 experiments/html5_css_h1/tests/html5lib_differential_h3b2.py \
             /tmp/trinity_html_tree_dump
+      - name: H3C1 nested tables and formatting scope under sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_table_context_h3c1_host.cpp \
+            -o /tmp/trinity_html_table_h3c1
+          /tmp/trinity_html_table_h3c1
