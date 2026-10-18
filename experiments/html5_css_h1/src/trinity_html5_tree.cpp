@@ -5,14 +5,23 @@ namespace trinity::html5 {
 static constexpr uint16_t NO = TreeNode::None;
 
 TreeNode& TreeBuilder::NodeAccess::operator[](size_t i) noexcept {
-    // All caller indices are validated against TreeBuilder::count_ before use.
+#ifdef TRINITY_HTML5_SEGMENTED_ONLY
+    return *arena->get(static_cast<uint16_t>(i));
+#else
     return arena ? *arena->get(static_cast<uint16_t>(i)) : fixed[i];
+#endif
 }
 const TreeNode& TreeBuilder::NodeAccess::operator[](size_t i) const noexcept {
+#ifdef TRINITY_HTML5_SEGMENTED_ONLY
+    return *arena->get(static_cast<uint16_t>(i));
+#else
     return arena ? *arena->get(static_cast<uint16_t>(i)) : fixed[i];
+#endif
 }
 
+#ifndef TRINITY_HTML5_SEGMENTED_ONLY
 TreeBuilder::TreeBuilder() noexcept { reset(); }
+#endif
 TreeBuilder::TreeBuilder(SegmentedNodeArena& storage) noexcept {
     nodes_.arena=&storage;
     reset();
@@ -20,7 +29,11 @@ TreeBuilder::TreeBuilder(SegmentedNodeArena& storage) noexcept {
 
 const TreeNode* TreeBuilder::get(uint16_t i) const noexcept {
     if(i>=count_)return nullptr;
+#ifdef TRINITY_HTML5_SEGMENTED_ONLY
+    return nodes_.arena ? nodes_.arena->get(i) : nullptr;
+#else
     return nodes_.arena ? nodes_.arena->get(i) : &nodes_.fixed[i];
+#endif
 }
 size_t TreeBuilder::node_limit() const noexcept {
     return nodes_.arena ? nodes_.arena->node_budget() : kMaxNodes;
