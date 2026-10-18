@@ -131,6 +131,17 @@ jobs:
             experiments/html5_css_h1/tests/html_h3c5_compact_host.cpp \
             -o /tmp/trinity_h3c5_compact
           /tmp/trinity_h3c5_compact
+      - name: H3C5 legacy-mode layout comparison
+        run: |
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_h3c5_compact_host.cpp \
+            -o /tmp/trinity_h3c5_legacy
+          /tmp/trinity_h3c5_legacy
       - name: H3C5 segmented-only freestanding C++ syntax
         run: |
           for f in experiments/html5_css_h1/src/*.cpp; do
