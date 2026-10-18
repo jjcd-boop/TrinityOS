@@ -1,0 +1,33 @@
+name: Trinity Rust PNG row prototype
+
+on:
+  push:
+    branches:
+      - prototype/rust-png-row-decoder-r1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust_png_rows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+      - name: Rust unit tests
+        run: cargo test --lib --manifest-path experiments/trinity_png_rows/Cargo.toml
+      - name: Build no_std static library
+        run: cargo build --release --manifest-path experiments/trinity_png_rows/Cargo.toml
+      - name: C++/Rust ABI smoke test
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror \
+            -Iexperiments/trinity_png_rows/include \
+            experiments/trinity_png_rows/tests/cpp_smoke.cpp \
+            experiments/trinity_png_rows/target/release/libtrinity_png_rows.a \
+            -ldl -lpthread -lm -o /tmp/trinity_png_rows_smoke
+          /tmp/trinity_png_rows_smoke
