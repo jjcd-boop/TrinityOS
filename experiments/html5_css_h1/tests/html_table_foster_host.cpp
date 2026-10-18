@@ -170,6 +170,25 @@ int main(){
                        "malformed table failure has explicit error");
         }
     }
+    {
+        // Deterministic malformed-markup stress: verify all accepted trees
+        // remain linked and every rejected tree reports an explicit bound/error.
+        const char* tags[]={"<table>","<tbody>","<tr>","<td>","<div>","<p>",
+                            "<b>","</b>","</div>","</p>","</td>","</tr>",
+                            "</tbody>","</table>","A"," B","<img src=x>"};
+        unsigned int state=0x9e3779b9u;
+        for(unsigned round=0;round<300;++round) {
+            std::string sample="<body>";
+            for(unsigned step=0;step<56;++step) {
+                state=state*1664525u+1013904223u;
+                sample+=tags[(state>>16)%(sizeof(tags)/sizeof(tags[0]))];
+            }
+            const bool success=document.build(sample.data(),sample.size());
+            if(success)check(validate_graph(),"stress graph invariants");
+            else check(document.error()!=BuildError::None,
+                       "stress rejects with documented error");
+        }
+    }
     if(failures) {
         std::printf("FAIL H3A table foster suite (%d failures)\n",failures);
         return 1;
