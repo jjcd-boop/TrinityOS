@@ -96,7 +96,8 @@ int main(){
         "p:hover { color: pink !important; }";
     check(css.parse(stylesheet,std::strlen(stylesheet)),"CSS stylesheet parses");
     check(css.count()==11,"all 11 source rules retained");
-    StyleResolver resolver(tree,css);
+    static SelectorList resolver_scratch;
+    StyleResolver resolver(tree,css,resolver_scratch);
     ComputedStyle leadstyle{};
     check(resolver.compute(lead,leadstyle),"computed style for lead paragraph");
     check(equal(leadstyle.color,"purple"),"!important overrides ID");
