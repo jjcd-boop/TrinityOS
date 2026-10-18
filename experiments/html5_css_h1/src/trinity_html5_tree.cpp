@@ -11,6 +11,7 @@ void TreeBuilder::reset() noexcept {
     nodes_[0].kind = NodeKind::Document;
     html_ = head_ = body_ = NO;
     mode_ = Mode::BeforeHtml;
+    active_count_=0;
     error_ = BuildError::None;
 }
 bool TreeBuilder::equal(const char* a, const char* b) noexcept {
@@ -72,6 +73,187 @@ uint16_t TreeBuilder::previous_sibling(uint16_t parent, uint16_t before) const n
     }
     return NO;
 }
+bool TreeBuilder::is_formatting(const char* n) noexcept {
+    return equal(n,"a") || equal(n,"b") || equal(n,"big") ||
+        equal(n,"code") || equal(n,"em") || equal(n,"font") ||
+        equal(n,"i") || equal(n,"s") || equal(n,"small") ||
+        equal(n,"strike") || equal(n,"strong") || equal(n,"tt") ||
+        equal(n,"u") || equal(n,"nobr");
+}
+bool TreeBuilder::is_special_block(const char* n) noexcept {
+    // Restricted H3B1 furthest-block set; full WHATWG 'special' category
+    // contains significantly more entries and requires full insertion modes.
+    return is_block(n) || equal(n,"center") || equal(n,"fieldset") ||
+        equal(n,"summary");
+}
+bool TreeBuilder::on_open_stack(uint16_t node,size_t* position) const noexcept {
+    for(size_t i=0;i<depth_;++i){
+        if(open_[i]==node){if(position)*position=i;return true;}
+    }
+    return false;
+}
+int TreeBuilder::active_last(const char* name) const noexcept {
+    for(size_t i=active_count_;i>0;--i){
+        const uint16_t index=active_[i-1];
+        if(index==NO)break;
+        if(index<count_ && equal(nodes_[index].name,name))
+            return static_cast<int>(i-1);
+    }
+    return -1;
+}
+void TreeBuilder::active_remove_at(size_t position) noexcept {
+    if(position>=active_count_)return;
+    for(size_t i=position+1;i<active_count_;++i)
+        active_[i-1]=active_[i];
+    --active_count_;
+}
+void TreeBuilder::active_marker() noexcept {
+    if(active_count_>=kFormattingLimit){error_=BuildError::FormattingLimit;return;}
+    active_[active_count_++]=NO;
+}
+void TreeBuilder::active_clear_marker() noexcept {
+    while(active_count_)if(active_[--active_count_]==NO)break;
+}
+bool TreeBuilder::active_add(uint16_t node) noexcept {
+    if(node>=count_)return false;
+    // Noah's Ark clause (bounded): at most three identical tag+attribute
+    // signatures between consecutive markers.
+    size_t matches=0,oldest=kFormattingLimit;
+    for(size_t i=active_count_;i>0;--i){
+        uint16_t a=active_[i-1];
+        if(a==NO)break;
+        const TreeNode& lhs=nodes_[a],& rhs=nodes_[node];
+        if(!equal(lhs.name,rhs.name)||lhs.attr_count!=rhs.attr_count)continue;
+        bool identical=true;
+        for(uint8_t j=0;j<lhs.attr_count;++j){
+            if(!equal(lhs.attrs[j].name,rhs.attrs[j].name) ||
+               !equal(lhs.attrs[j].value,rhs.attrs[j].value) ||
+               lhs.attrs[j].has_value!=rhs.attrs[j].has_value){
+                identical=false;break;
+            }
+        }
+        if(identical){++matches;oldest=i-1;}
+    }
+    if(matches>=3)active_remove_at(oldest);
+    if(active_count_>=kFormattingLimit){error_=BuildError::FormattingLimit;return false;}
+    active_[active_count_++]=node;
+    return true;
+}
+uint16_t TreeBuilder::clone_element(uint16_t source,uint16_t parent) noexcept {
+    if(source>=count_ || nodes_[source].kind!=NodeKind::Element)return NO;
+    const uint16_t index=create(NodeKind::Element,parent,nodes_[source].name,nullptr,false);
+    if(index==NO)return NO;
+    TreeNode& target=nodes_[index];
+    const TreeNode& original=nodes_[source];
+    target.attr_count=original.attr_count;
+    for(uint8_t i=0;i<target.attr_count;++i)target.attrs[i]=original.attrs[i];
+    return index;
+}
+bool TreeBuilder::reconstruct_formatting() noexcept {
+    if(!active_count_ || active_[active_count_-1]==NO ||
+       on_open_stack(active_[active_count_-1]))return true;
+    size_t first=active_count_-1;
+    while(first>0 && active_[first-1]!=NO &&
+          !on_open_stack(active_[first-1]))--first;
+    for(size_t i=first;i<active_count_;++i){
+        if(active_[i]==NO || on_open_stack(active_[i]))continue;
+        uint16_t parent=open_[depth_-1];
+        uint16_t before=NO;
+        // Active entries may outlive malformed table tokens: use the same
+        // adjusted insertion parent as the normal H3A element insertion.
+        foster_location(parent,before);
+        const uint16_t clone=clone_element(active_[i],parent);
+        if(clone==NO)return false;
+        if(before!=NO && !relocate(clone,parent,before))return false;
+        if(!push(clone))return false;
+        active_[i]=clone;
+    }
+    return true;
+}
+bool TreeBuilder::relocate(uint16_t node,uint16_t parent,uint16_t before) noexcept {
+    if(node==0 || node>=count_ || parent>=count_ || node==parent ||
+       before==node || (before!=NO &&
+       (before>=count_||nodes_[before].parent!=parent)))return false;
+    // Reject moves into the node's own subtree.
+    for(uint16_t p=parent,guard=0;p!=NO && guard<count_;++guard){
+        if(p==node)return false;
+        p=nodes_[p].parent;
+    }
+    const uint16_t old=nodes_[node].parent;
+    if(old==NO || old>=count_)return false;
+    uint16_t previous=NO,current=nodes_[old].first_child;
+    while(current!=NO && current!=node){
+        previous=current;current=nodes_[current].next_sibling;
+    }
+    if(current!=node)return false;
+    const uint16_t next=nodes_[node].next_sibling;
+    if(previous==NO)nodes_[old].first_child=next;
+    else nodes_[previous].next_sibling=next;
+    if(nodes_[old].last_child==node)nodes_[old].last_child=previous;
+    nodes_[node].parent=parent;nodes_[node].next_sibling=NO;
+    uint16_t predecessor=previous_sibling(parent,before);
+    if(before==NO){
+        if(nodes_[parent].last_child!=NO)
+            nodes_[nodes_[parent].last_child].next_sibling=node;
+        else nodes_[parent].first_child=node;
+        nodes_[parent].last_child=node;
+    } else {
+        nodes_[node].next_sibling=before;
+        if(predecessor==NO)nodes_[parent].first_child=node;
+        else nodes_[predecessor].next_sibling=node;
+    }
+    return true;
+}
+bool TreeBuilder::move_children(uint16_t source,uint16_t target,uint16_t except) noexcept {
+    if(source>=count_ || target>=count_)return false;
+    // Source children are moved in order, except a newly cloned target node.
+    for(size_t guard=0;guard<count_;++guard){
+        const uint16_t first=nodes_[source].first_child;
+        if(first==NO || first==except)return true;
+        if(!relocate(first,target,NO))return false;
+    }
+    error_=BuildError::TokenLimit;
+    return false;
+}
+bool TreeBuilder::adopt_formatting_end(const char* name) noexcept {
+    const int slot=active_last(name);
+    if(slot<0){close_open(name);return true;}
+    const uint16_t fmt=active_[static_cast<size_t>(slot)];
+    size_t pos=0;
+    if(!on_open_stack(fmt,&pos)){
+        active_remove_at(static_cast<size_t>(slot));return true;
+    }
+    // The full algorithm handles complex intermediate formatting nodes,
+    // special element scopes, markers, and a bookmark. This first bounded
+    // implementation performs its no-furthest-block branch and direct-child
+    // furthest-block repair. Complex cases conservatively close the stack.
+    size_t furthest_pos=depth_;
+    for(size_t i=pos+1;i<depth_;++i){
+        if(is_special_block(nodes_[open_[i]].name)){furthest_pos=i;break;}
+    }
+    if(furthest_pos==depth_){
+        depth_=pos;
+        active_remove_at(static_cast<size_t>(slot));
+        return true;
+    }
+    const uint16_t furthest=open_[furthest_pos];
+    if(nodes_[furthest].parent!=fmt || pos+1!=furthest_pos){
+        depth_=pos;
+        active_remove_at(static_cast<size_t>(slot));
+        return true;
+    }
+    const uint16_t parent=nodes_[fmt].parent;
+    const uint16_t before=nodes_[fmt].next_sibling;
+    if(!relocate(furthest,parent,before))return false;
+    const uint16_t clone=clone_element(fmt,furthest);
+    if(clone==NO || !move_children(furthest,clone,clone))return false;
+    // Continue parsing within the open furthest block; stale descendants
+    // are no longer current but other active formatting entries can rebuild.
+    depth_=pos;open_[depth_++]=furthest;
+    active_remove_at(static_cast<size_t>(slot));
+    return true;
+}
+
 uint16_t TreeBuilder::create(NodeKind kind, uint16_t parent, const char* name,
                              const Token* token, bool implied, uint16_t before) noexcept {
     if (count_ >= kMaxNodes || parent >= count_) {
