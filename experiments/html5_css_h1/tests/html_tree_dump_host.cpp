@@ -14,7 +14,16 @@ static void print(uint16_t parent,size_t depth) {
             print(i,depth+1);
             std::puts("/E");
         }else if(n->kind==NodeKind::Text){
-            std::printf("T:%s\n",n->text);
+            std::fputs("T:",stdout);
+            for(size_t k=0;k<n->text_len;++k){
+                const char ch=n->text[k];
+                if(ch=='\n')std::fputs("\\n",stdout);
+                else if(ch=='\r')std::fputs("\\r",stdout);
+                else if(ch=='\t')std::fputs("\\t",stdout);
+                else if(ch=='\\')std::fputs("\\\\",stdout);
+                else std::putchar(static_cast<unsigned char>(ch));
+            }
+            std::putchar('\n');
         }
         i=n->next_sibling;
     }
