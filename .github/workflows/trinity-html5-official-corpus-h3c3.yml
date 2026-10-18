@@ -41,6 +41,31 @@ jobs:
             /tmp/trinity_html_tree_dump /tmp/trinity_html5lib_official \
             --maximum 240 --minimum-scanned 120 \
             --report experiments/html5_css_h1/h3c3_official_corpus_results.json
+      - name: Freestanding segmented node arena syntax check
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror \
+            -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp
+      - name: Quota-controlled segmented node arena with sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_segmented_arena_h3c3_host.cpp \
+            -o /tmp/trinity_html_segmented_h3c3
+          /tmp/trinity_html_segmented_h3c3
+      - name: H3C2 parser regression smoke under sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_table_modes_h3c2_host.cpp \
+            -o /tmp/trinity_html_table_h3c2
+          /tmp/trinity_html_table_h3c2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
