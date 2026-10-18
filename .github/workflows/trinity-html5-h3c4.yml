@@ -1,0 +1,105 @@
+name: Trinity HTML5 H3C4 live segmented TreeBuilder
+
+on:
+  push:
+    branches:
+      - prototype/html5-css-engine-h3c4
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official_tree_corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host parser compilation and sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_tree_dump_host.cpp \
+            -o /tmp/trinity_html_tree_dump
+      - name: Retrieve pinned historical html5lib tree construction fixtures
+        run: |
+          mkdir -p /tmp/trinity_html5lib_official
+          BASE="https://raw.githubusercontent.com/html5lib/html5lib-tests/9329e64694e7835d0dcff9811e22856ef6ad16f9/tree-construction"
+          for f in adoption01.dat adoption02.dat blocks.dat tables01.dat \
+                   inbody01.dat tests1.dat tests2.dat tests3.dat; do
+            curl --fail --location --retry 3 --silent --show-error \
+              "$BASE/$f" -o "/tmp/trinity_html5lib_official/$f"
+            test -s "/tmp/trinity_html5lib_official/$f"
+          done
+      - name: Run official-corpus survey (report mismatches, do not hide them)
+        run: |
+          python3 -m pip install html5lib==1.1
+          python3 experiments/html5_css_h1/tests/html5lib_official_corpus_h3c3.py \
+            /tmp/trinity_html_tree_dump /tmp/trinity_html5lib_official \
+            --maximum 240 --minimum-scanned 120 \
+            --report experiments/html5_css_h1/h3c3_official_corpus_results.json
+      - name: Freestanding segmented node arena syntax check
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror \
+            -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp
+      - name: Quota-controlled segmented node arena with sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_segmented_arena_h3c3_host.cpp \
+            -o /tmp/trinity_html_segmented_h3c3
+          /tmp/trinity_html_segmented_h3c3
+      - name: H3C2 parser regression smoke under sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_table_modes_h3c2_host.cpp \
+            -o /tmp/trinity_html_table_h3c2
+          /tmp/trinity_html_table_h3c2
+      - name: H3C3 corpus-discovered implied paragraph closure
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_block_closure_h3c3_host.cpp \
+            -o /tmp/trinity_html_blocks_h3c3
+          /tmp/trinity_html_blocks_h3c3
+      - name: H3C4 live TreeBuilder 2604 nodes and quota failure tests
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_dynamic_tree_h3c4_host.cpp \
+            -o /tmp/trinity_html_dynamic_h3c4
+          /tmp/trinity_html_dynamic_h3c4
+      - name: H3C4 full freestanding C++ parser syntax check
+        run: |
+          for f in experiments/html5_css_h1/src/*.cpp; do
+            clang++ -std=c++20 -Wall -Wextra -Werror \
+              -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+              -Iexperiments/html5_css_h1/include "$f"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trinity-h3c3-official-corpus-report
+          path: experiments/html5_css_h1/h3c3_official_corpus_results.json
+          if-no-files-found: warn
