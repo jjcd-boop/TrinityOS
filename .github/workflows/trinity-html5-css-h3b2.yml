@@ -80,3 +80,15 @@ jobs:
             experiments/html5_css_h1/tests/html_adoption_h3b2_host.cpp \
             -o /tmp/trinity_html_adoption_h3b2
           /tmp/trinity_html_adoption_h3b2
+      - name: HTML5lib independent tree-structure comparisons
+        run: |
+          python3 -m pip install --break-system-packages html5lib==1.1
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_tree_dump_host.cpp \
+            -o /tmp/trinity_html_tree_dump
+          python3 experiments/html5_css_h1/tests/html5lib_differential_h3b2.py \
+            /tmp/trinity_html_tree_dump
