@@ -17,8 +17,9 @@ enum class NodeArenaError : uint8_t {
     None, BadConfiguration, NodeBudget, ByteBudget, AllocatorFailure
 };
 
-// Standalone staged design for replacing the 384-node TreeBuilder fixed array.
-// NOT YET wired into TreeBuilder. Nodes have stable, 16-bit, non-reused handles.
+// H3C4 TreeBuilder may use this as its live node store via an explicit
+// constructor. The legacy fixed backend remains for compatibility.
+// Nodes have stable, 16-bit, non-reused handles.
 // A segmented arena isolates allocation failure from the parser logic.
 class SegmentedNodeArena {
 public:
