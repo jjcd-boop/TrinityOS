@@ -14,15 +14,22 @@ def expected_body_children(source):
     if body is None:
         raise RuntimeError("No body from reference parser")
     out = []
+    def escaped(value):
+        # Match the C++ tree-dumper's escaped, line-delimited text encoding.
+        return (value.replace("\\", "\\\\").replace("\n", "\\n")
+                     .replace("\r", "\\r").replace("\t", "\\t"))
     def children(element):
         if element.text:
-            out.append("T:" + element.text)
+            out.append("T:" + escaped(element.text))
         for node in element:
-            out.append("E:" + str(node.tag))
-            children(node)
-            out.append("/E")
+            # Comments aren't in the intentionally limited element/text
+            # differential, but their adjacent text/tail still matters.
+            if isinstance(node.tag, str):
+                out.append("E:" + str(node.tag))
+                children(node)
+                out.append("/E")
             if node.tail:
-                out.append("T:" + node.tail)
+                out.append("T:" + escaped(node.tail))
     children(body)
     return out
 
