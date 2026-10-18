@@ -1,0 +1,82 @@
+name: Trinity HTML5 CSS H3B2 formatting relocation
+
+on:
+  push:
+    branches:
+      - prototype/html5-css-engine-h3b2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  html_tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Freestanding C++ syntax
+        run: |
+          for f in experiments/html5_css_h1/src/*.cpp; do
+            clang++ -std=c++20 -Wall -Wextra -Werror \
+              -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+              -Iexperiments/html5_css_h1/include "$f"
+          done
+      - name: Existing HTML tokenizer test
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/tests/html_tokenizer_host.cpp \
+            -o /tmp/trinity_html_h1
+          /tmp/trinity_html_h1
+      - name: Existing CSS flow test
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_css_flow.cpp \
+            experiments/html5_css_h1/tests/css_flow_host.cpp \
+            -o /tmp/trinity_css_h1
+          /tmp/trinity_css_h1
+      - name: H2 tree construction test
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_tree_host.cpp \
+            -o /tmp/trinity_html_tree_h2
+          /tmp/trinity_html_tree_h2
+      - name: H3A table foster parenting and DOM link integrity
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_table_foster_host.cpp \
+            -o /tmp/trinity_html_table_h3a
+          /tmp/trinity_html_table_h3a
+      - name: H3B active formatting, adoption and malformed HTML stress
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_formatting_host.cpp \
+            -o /tmp/trinity_html_format_h3b
+          /tmp/trinity_html_format_h3b
+      - name: H3B2 intermediate adoption and malformed-tree stress
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_adoption_h3b2_host.cpp \
+            -o /tmp/trinity_html_adoption_h3b2
+          /tmp/trinity_html_adoption_h3b2
