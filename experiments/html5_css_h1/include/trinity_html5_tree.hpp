@@ -31,7 +31,7 @@ struct TreeNode {
 };
 
 // First bounded HTML5 tree-construction pass. This is NOT yet a complete
-// WHATWG tree builder (limited adoption-agency, partial foster parenting, templates,
+// WHATWG tree builder (bounded adoption-agency repair, partial foster parenting, templates,
 // SVG/MathML namespaces or scripting-driven document.write).
 //
 // The large fixed node array belongs in an isolated service-owned allocation,
@@ -88,6 +88,12 @@ private:
     bool on_open_stack(uint16_t node, size_t* position = nullptr) const noexcept;
     bool reconstruct_formatting() noexcept;
     bool adopt_formatting_end(const char* name) noexcept;
+    // Bounded active-list and stack edits for H3B2 adoption-agency repair.
+    int active_index(uint16_t node) const noexcept;
+    void stack_remove(size_t at) noexcept;
+    bool stack_insert(size_t at, uint16_t node) noexcept;
+    bool active_insert(size_t at, uint16_t node) noexcept;
+    bool formatting_in_scope(size_t open_position) const noexcept;
     uint16_t clone_element(uint16_t source, uint16_t parent) noexcept;
     bool relocate(uint16_t node, uint16_t parent, uint16_t before) noexcept;
     bool move_children(uint16_t source, uint16_t target, uint16_t except) noexcept;
