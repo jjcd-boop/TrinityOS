@@ -71,14 +71,19 @@ private:
     static bool is_block(const char* name) noexcept;
     static bool is_heading(const char* name) noexcept;
     uint16_t create(NodeKind kind, uint16_t parent, const char* name,
-                    const Token* attrs, bool implied) noexcept;
+                    const Token* attrs, bool implied, uint16_t before = TreeNode::None) noexcept;
     bool push(uint16_t index) noexcept;
     bool enter_html(const Token* original) noexcept;
     bool enter_head(const Token* original) noexcept;
     bool finish_head() noexcept;
     bool enter_body(const Token* original) noexcept;
-    bool append_text(uint16_t parent, const char* text, size_t length) noexcept;
+    bool append_text(uint16_t parent, const char* text, size_t length,
+                     uint16_t before = TreeNode::None) noexcept;
     bool append_token_text(const Token& t) noexcept;
+    // HTML table foster parenting: adjusted insertion before an open table.
+    // Only active when the insertion target is a table scaffold, never a cell.
+    bool foster_location(uint16_t& parent, uint16_t& before) const noexcept;
+    uint16_t previous_sibling(uint16_t parent, uint16_t before) const noexcept;
     bool handle(const Token& t) noexcept;
     bool in_body(const Token& t) noexcept;
     bool start_body_tag(const Token& t) noexcept;
