@@ -89,6 +89,8 @@ private:
     bool start_body_tag(const Token& t) noexcept;
     bool end_body_tag(const Token& t) noexcept;
     bool close_open(const char* name) noexcept;
+    // Never close a cell/row owned by an outer nested table.
+    bool close_open_in_table(const char* name) noexcept;
     bool close_heading() noexcept;
     bool close_list_item(const char* name) noexcept;
     bool ensure_table_context(const char* name) noexcept;
