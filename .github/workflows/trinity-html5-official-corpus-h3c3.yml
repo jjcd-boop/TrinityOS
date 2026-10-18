@@ -66,6 +66,16 @@ jobs:
             experiments/html5_css_h1/tests/html_table_modes_h3c2_host.cpp \
             -o /tmp/trinity_html_table_h3c2
           /tmp/trinity_html_table_h3c2
+      - name: H3C3 corpus-discovered implied paragraph closure
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/tests/html_block_closure_h3c3_host.cpp \
+            -o /tmp/trinity_html_blocks_h3c3
+          /tmp/trinity_html_blocks_h3c3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
