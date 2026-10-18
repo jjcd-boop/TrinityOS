@@ -1,0 +1,32 @@
+name: Trinity CSS C1 syntax and stylesheet parser
+
+on:
+  push:
+    branches:
+      - prototype/css-engine-c1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  css_c1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Freestanding-style syntax
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror \
+            -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+            -Iexperiments/css_engine_c1/include \
+            experiments/css_engine_c1/src/trinity_css_c1.cpp
+      - name: CSS tokenizer/parser tests with ASan and UBSan
+        run: |
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/css_engine_c1/include \
+            experiments/css_engine_c1/src/trinity_css_c1.cpp \
+            experiments/css_engine_c1/tests/css_c1_host.cpp \
+            -o /tmp/trinity_css_c1_host
+          /tmp/trinity_css_c1_host
