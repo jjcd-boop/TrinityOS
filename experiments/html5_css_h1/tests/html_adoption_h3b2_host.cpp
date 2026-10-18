@@ -48,13 +48,17 @@ static void parse(const char* html){
 }
 int main(){
     {
-        parse("<b><i><p>X</b>Y</i>Z</p>");
+        // Assert the intermediate adoption result before a later </i>
+        // starts a second adoption cycle with different ancestor bookkeeping.
+        parse("<b><i><p>X</b>Y");
         uint16_t body=doc.body_index(),b=child(body,"b"),i=next(b);
         uint16_t p=child(i,"p");
         check(b!=NO&&i!=NO&&p!=NO,"intermediate italic and paragraph relocation");
         check(child(p,"b")!=NO&&text(first(child(p,"b")),"X"),
               "adoption clones bold within furthest block");
         check(graph(),"intermediate formatter graph");
+        parse("<b><i><p>X</b>Y</i>Z</p>");
+        check(graph(),"subsequent adoption must retain valid DOM graph");
     }
     {
         parse("<b><em><i><div>X</div></b>Y</em>Z</i>");
