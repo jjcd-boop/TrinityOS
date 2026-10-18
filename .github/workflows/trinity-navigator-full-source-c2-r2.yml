@@ -1,0 +1,101 @@
+name: Trinity Navigator HTML5 CSS C2 H4A integrated source
+
+on:
+  push:
+    branches:
+      - integration/navigator-html5-css-c2-h4a-source-r2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate_and_package_full_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Freestanding C++20 syntax for new CSS and HTML services
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror \
+            -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+            -Iexperiments/css_engine_c1/include \
+            -Iexperiments/html5_css_h1/include \
+            experiments/css_engine_c1/src/trinity_css_c1.cpp \
+            experiments/css_engine_c1/src/trinity_css_c2.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp
+      - name: CSS C1 tokenizer declaration parser sanitizer suite
+        run: |
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/css_engine_c1/include \
+            experiments/css_engine_c1/src/trinity_css_c1.cpp \
+            experiments/css_engine_c1/tests/css_c1_host.cpp -o /tmp/css_c1
+          /tmp/css_c1
+      - name: CSS C2 and H4A integrated computed-style suite
+        run: |
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/css_engine_c1/include -Iexperiments/html5_css_h1/include \
+            experiments/css_engine_c1/src/trinity_css_c1.cpp \
+            experiments/css_engine_c1/src/trinity_css_c2.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/css_engine_c1/tests/css_c2_h4a_host.cpp -o /tmp/css_c2_h4a
+          /tmp/css_c2_h4a
+      - name: H3C5 compact segmented HTML DOM regression
+        run: |
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -DTRINITY_HTML5_SEGMENTED_ONLY -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_h3c5_compact_host.cpp -o /tmp/html_h3c5
+          /tmp/html_h3c5
+      - name: Original HTML H3C2 parsing and CSS flow legacy regressions
+        run: |
+          INC="-Iexperiments/html5_css_h1/include"
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer $INC \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/src/trinity_html5_tree.cpp \
+            experiments/html5_css_h1/src/trinity_html5_segmented_nodes.cpp \
+            experiments/html5_css_h1/tests/html_table_modes_h3c2_host.cpp -o /tmp/html_table
+          /tmp/html_table
+          clang++ -std=c++20 -O1 -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer $INC \
+            experiments/html5_css_h1/src/trinity_css_flow.cpp \
+            experiments/html5_css_h1/tests/css_flow_host.cpp -o /tmp/css_flow
+          /tmp/css_flow
+      - name: Package entire tracked merged repository as full-source ZIP
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          NAME=TrinityOS_NAVIGATOR_HTML5_CSS_C2_H4A_FULL_GITHUB_SOURCE_R2
+          git archive --format=zip -o "dist/$NAME.zip" HEAD
+          (
+            cd dist
+            sha256sum "$NAME.zip" > "$NAME.sha256"
+          )
+          {
+            echo "TRINITY NAVIGATOR INTEGRATED GITHUB SOURCE — R2"
+            echo "branch=$(git branch --show-current)"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "Contains complete tracked repository tree at this Git commit."
+            echo "Baseline: GitHub Trinity Desktop Functionality R2 (2026-10-11)."
+            echo "NOT the later R95 authoritative working source and NOT EFI."
+            echo "Includes merged HTML H3C5 + CSS C1 + C2/H4A development files."
+            echo "GitHub CI validates sources; no Acer hardware test performed."
+          } > dist/SOURCE_SCOPE_AND_PROVENANCE.txt
+          unzip -t "dist/$NAME.zip" | tail -n 2
+          ls -lh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrinityOS_NAVIGATOR_HTML5_CSS_C2_H4A_FULL_GITHUB_SOURCE_R2
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
