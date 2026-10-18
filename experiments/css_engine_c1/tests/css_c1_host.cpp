@@ -81,8 +81,8 @@ int main(){
     }
     {
         std::string css="a{color:"+std::string(600,'x')+";}";
-        check(!sheet.parse(css.data(),css.size())&&sheet.error()==ParseError::ValueLimit,
-              "fail closed on value budget");
+        check(!sheet.parse(css.data(),css.size())&&sheet.error()==ParseError::TokenOverflow,
+              "fail closed when a token exceeds its bounded buffer");
     }
     {
         std::string css="a{";
