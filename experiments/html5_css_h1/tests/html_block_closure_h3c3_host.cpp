@@ -16,7 +16,7 @@ static bool eq(const char* a,const char* b){
 }
 int main(){
     static const char* blocks[]={
-        "center","dir","dialog","fieldset","menu",
+        "center","dir","fieldset","menu",
         "search","summary","listing","div","article"
     };
     for(const char* block:blocks) {
@@ -36,6 +36,16 @@ int main(){
         check(sibling_node && sibling_node->first_child!=NO &&
               eq(tree.get(sibling_node->first_child)->text,"beta"),
               "block owns its text");
+    }
+    {
+        const char markup[]="<p>foo<dialog>bar<p>baz";
+        check(tree.build(markup,std::strlen(markup)),"dialog reference parse");
+        const uint16_t p=tree.first_named_child(tree.body_index(),"p");
+        const uint16_t d=tree.first_named_child(p,"dialog");
+        check(d!=NO,"dialog remains inside open paragraph");
+        const uint16_t second=next(p);
+        check(second!=NO && eq(tree.get(second)->name,"p"),
+              "second paragraph after implicit p closure");
     }
     if(failures){std::printf("FAIL H3C3 block closure (%d)\n",failures);return 1;}
     std::puts("PASS H3C3 block implied-paragraph closure cases");
