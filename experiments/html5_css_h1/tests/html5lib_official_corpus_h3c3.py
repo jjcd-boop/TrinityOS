@@ -43,7 +43,7 @@ def expected_body(html):
     root = html5lib.parse(html, treebuilder="etree", namespaceHTMLElements=False)
     body = root.find("body")
     if body is None:
-        raise RuntimeError("Reference parser returned no body")
+        return None  # frameset documents and other non-body modes
     output = []
     def escape(s):
         return (s.replace("\\", "\\\\").replace("\n", "\\n")
@@ -114,6 +114,10 @@ def main():
                     continue
                 actual=result.stdout.splitlines()
                 expected=expected_body(html)
+                if expected is None:
+                    counts["skip_nonbody_reference"]+=1
+                    totals["skip_nonbody_reference"]+=1
+                    continue
                 if actual == expected:
                     counts["tree_match"]+=1
                     totals["tree_match"]+=1
