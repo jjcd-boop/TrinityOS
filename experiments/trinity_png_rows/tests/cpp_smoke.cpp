@@ -1,4 +1,9 @@
 #include "trinity_png_rows.h"
+// Host-only C++ linker shim for Rust core's unwind table reference.
+// Production Trinity builds MUST define a real no-unwind ABI contract instead.
+// No exception may be thrown through Rust (panic=abort, FFI is noexcept).
+extern "C" void rust_eh_personality() {}
+
 #include <cstdint>
 #include <cstdio>
 
