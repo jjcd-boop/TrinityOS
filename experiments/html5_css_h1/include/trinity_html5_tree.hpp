@@ -62,6 +62,13 @@ private:
     static constexpr size_t kFormattingLimit = 64;
     uint16_t active_[kFormattingLimit]{};
     size_t active_count_{0};
+    // WHATWG "in table text": buffer consecutive character tokens until
+    // the next non-character token, then classify the entire run. The finite
+    // cap is explicit: failure is preferable to misplacing text fragments.
+    static constexpr size_t kPendingTableTextLimit = 8192;
+    char pending_table_text_[kPendingTableTextLimit]{};
+    size_t pending_table_len_{0};
+    bool pending_table_active_{false};
     uint16_t html_{TreeNode::None};
     uint16_t head_{TreeNode::None};
     uint16_t body_{TreeNode::None};
@@ -104,6 +111,11 @@ private:
     bool append_text(uint16_t parent, const char* text, size_t length,
                      uint16_t before = TreeNode::None) noexcept;
     bool append_token_text(const Token& t) noexcept;
+    bool table_text_context() const noexcept;
+    bool collect_table_text(const Token& t) noexcept;
+    bool flush_table_text() noexcept;
+    bool close_caption_context() noexcept;
+    bool table_open_in_scope() const noexcept;
     // HTML table foster parenting: adjusted insertion before an open table.
     // Only active when the insertion target is a table scaffold, never a cell.
     bool foster_location(uint16_t& parent, uint16_t& before) const noexcept;
