@@ -1,0 +1,45 @@
+name: Trinity HTML5 CSS H1 prototype
+
+on:
+  push:
+    branches:
+      - prototype/html5-css-engine-h1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  html_css:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: |
+          clang++ --version
+      - name: Freestanding target syntax
+        run: |
+          for f in experiments/html5_css_h1/src/*.cpp; do
+            clang++ -std=c++20 -Wall -Wextra -Werror \
+              -ffreestanding -fno-exceptions -fno-rtti -fsyntax-only \
+              -Iexperiments/html5_css_h1/include "$f"
+          done
+      - name: HTML tokenizer test with sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_html5_tokenizer.cpp \
+            experiments/html5_css_h1/tests/html_tokenizer_host.cpp \
+            -o /tmp/trinity_html_h1
+          /tmp/trinity_html_h1
+      - name: CSS flow test with sanitizers
+        run: |
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iexperiments/html5_css_h1/include \
+            experiments/html5_css_h1/src/trinity_css_flow.cpp \
+            experiments/html5_css_h1/tests/css_flow_host.cpp \
+            -o /tmp/trinity_css_h1
+          /tmp/trinity_css_h1
