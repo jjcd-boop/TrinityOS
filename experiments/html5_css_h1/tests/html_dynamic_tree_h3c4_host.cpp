@@ -70,13 +70,13 @@ int main(){
         check(parser.segmented_mode(),"explicit segmented builder");
         const auto html=document(1300);
         check(parser.build(html.data(),html.size()),"live HTML > 384 nodes parsed");
-        check(parser.count()==2604,"document includes skeleton + element/text nodes");
+        check(parser.count()==2605,"doctype, skeleton and element/text node counts");
         check(arena.count()==parser.count(),"arena and parser node counts agree");
         check(arena.reserved_bytes()<=arena.byte_budget(),"actual memory within caller quota");
         graph(parser,1300);
         const auto small=document(2);
         check(parser.build(small.data(),small.size()),"rebuild releases old arena and succeeds");
-        check(parser.count()==8 && arena.count()==8,"rebuilt tree has no stale nodes");
+        check(parser.count()==9 && arena.count()==9,"rebuilt tree has no stale nodes");
         graph(parser,2);
         check(a.live==arena.reserved_bytes(),"no leaked pages after rebuild");
         arena.clear();
@@ -135,6 +135,6 @@ int main(){
         graph(legacy,2);
     }
     if(failures){std::printf("FAIL H3C4 live DOM segmented migration (%d)\n",failures);return 1;}
-    std::puts("PASS H3C4 live TreeBuilder 2604 nodes, node/byte/OOM quotas, rebuild, legacy");
+    std::puts("PASS H3C4 live TreeBuilder 2605 nodes, node/byte/OOM quotas, rebuild, legacy");
     return 0;
 }
