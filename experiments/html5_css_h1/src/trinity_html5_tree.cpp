@@ -265,7 +265,22 @@ bool TreeBuilder::adopt_formatting_end(const char* name) noexcept {
     }
     for(size_t outer=0;outer<8;++outer){
         const int found=active_last(name);
-        if(found<0){close_open(name);return true;}
+        if(found<0){
+            // "Any other end tag" fallback. The active-formatting list may
+            // be cut off by a td/th/caption marker although a same-named
+            // element remains beneath an inner table. Never close across
+            // the first special element in the open-element stack.
+            for(size_t i=depth_;i>1;--i){
+                const char* top=nodes_[open_[i-1]].name;
+                if(equal(top,name)){depth_=i-1;return true;}
+                if(is_special_block(top) || equal(top,"td") ||
+                   equal(top,"th") || equal(top,"tbody") ||
+                   equal(top,"thead") || equal(top,"tfoot") ||
+                   equal(top,"tr") || equal(top,"template") ||
+                   equal(top,"select"))return true;
+            }
+            return true;
+        }
         const uint16_t formatting=active_[static_cast<size_t>(found)];
         size_t format_pos=0;
         if(!on_open_stack(formatting,&format_pos)){
