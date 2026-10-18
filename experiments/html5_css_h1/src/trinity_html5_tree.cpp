@@ -59,18 +59,37 @@ bool TreeBuilder::is_block(const char* n) noexcept {
         is_heading(n) || equal(n,"address") || equal(n,"figure") ||
         equal(n,"figcaption") || equal(n,"hr") || equal(n,"details");
 }
+uint16_t TreeBuilder::previous_sibling(uint16_t parent, uint16_t before) const noexcept {
+    if (parent>=count_) return NO;
+    if (before==NO) return nodes_[parent].last_child;
+    if (before>=count_ || nodes_[before].parent!=parent) return NO;
+    uint16_t current=nodes_[parent].first_child, previous=NO;
+    // Bounded traversal also prevents an infinite loop on corrupted links.
+    for (size_t i=0;i<count_ && current!=NO;++i) {
+        if (current==before) return previous;
+        previous=current;
+        current=nodes_[current].next_sibling;
+    }
+    return NO;
+}
 uint16_t TreeBuilder::create(NodeKind kind, uint16_t parent, const char* name,
-                             const Token* token, bool implied) noexcept {
+                             const Token* token, bool implied, uint16_t before) noexcept {
     if (count_ >= kMaxNodes || parent >= count_) {
         error_ = BuildError::NodeLimit; return NO;
     }
+    if (before!=NO && (before>=count_ || nodes_[before].parent!=parent)) {
+        error_ = BuildError::TokenOverflow; return NO;
+    }
+    if (token && token->attr_count > 6) {
+        error_ = BuildError::AttributeLimit; return NO;
+    }
+    const uint16_t predecessor=previous_sibling(parent,before);
     const uint16_t index = static_cast<uint16_t>(count_++);
     TreeNode& n = nodes_[index]; n = TreeNode{};
     n.kind = kind; n.parent = parent; n.implied = implied;
     bool overflow = false;
     copy(n.name, sizeof(n.name), name, overflow);
     if (token) {
-        if (token->attr_count > 6) { error_ = BuildError::AttributeLimit; return NO; }
         n.attr_count = token->attr_count;
         for (uint8_t i = 0; i < n.attr_count; ++i) {
             copy(n.attrs[i].name,sizeof(n.attrs[i].name),token->attrs[i].name,overflow);
@@ -79,13 +98,16 @@ uint16_t TreeBuilder::create(NodeKind kind, uint16_t parent, const char* name,
         }
     }
     if (overflow) { error_ = BuildError::AttributeLimit; return NO; }
-    TreeNode& parent_node=nodes_[parent];
-    if (parent_node.last_child != NO) {
-        nodes_[parent_node.last_child].next_sibling=index;
+    TreeNode& p=nodes_[parent];
+    if(before==NO) {
+        if(p.last_child!=NO) nodes_[p.last_child].next_sibling=index;
+        else p.first_child=index;
+        p.last_child=index;
     } else {
-        parent_node.first_child=index;
+        n.next_sibling=before;
+        if(predecessor==NO) p.first_child=index;
+        else nodes_[predecessor].next_sibling=index;
     }
-    parent_node.last_child=index;
     return index;
 }
 bool TreeBuilder::push(uint16_t index) noexcept {
@@ -129,14 +151,18 @@ bool TreeBuilder::enter_body(const Token* t) noexcept {
     mode_=Mode::InBody;
     return true;
 }
-bool TreeBuilder::append_text(uint16_t parent,const char* s,size_t n) noexcept {
+bool TreeBuilder::append_text(uint16_t parent,const char* s,size_t n,
+                              uint16_t before) noexcept {
     if (parent>=count_ || !s) return false;
+    if (before!=NO && (before>=count_ || nodes_[before].parent!=parent)) {
+        error_=BuildError::TokenOverflow;return false;
+    }
     size_t offset=0;
     while (offset<n) {
-        uint16_t idx=nodes_[parent].last_child;
+        uint16_t idx=previous_sibling(parent,before);
         if (idx==NO || nodes_[idx].kind!=NodeKind::Text ||
             nodes_[idx].text_len>=sizeof(nodes_[idx].text)-1) {
-            idx=create(NodeKind::Text,parent,nullptr,nullptr,false);
+            idx=create(NodeKind::Text,parent,nullptr,nullptr,false,before);
             if(idx==NO) return false;
         }
         TreeNode& target=nodes_[idx];
@@ -150,9 +176,33 @@ bool TreeBuilder::append_text(uint16_t parent,const char* s,size_t n) noexcept {
     }
     return true;
 }
+bool TreeBuilder::foster_location(uint16_t& parent, uint16_t& before) const noexcept {
+    if(depth_<=1)return false;
+    const char* current=nodes_[open_[depth_-1]].name;
+    if(!equal(current,"table") && !equal(current,"tbody") &&
+       !equal(current,"thead") && !equal(current,"tfoot") &&
+       !equal(current,"tr"))return false;
+    // The most recently opened table is the foster-parenting anchor;
+    // do not cross a nested table or leave the document's owned arena.
+    for(size_t i=depth_;i>1;--i) {
+        const uint16_t index=open_[i-1];
+        if(equal(nodes_[index].name,"table")) {
+            const uint16_t owner=nodes_[index].parent;
+            if(owner==NO)return false;
+            parent=owner;before=index;
+            return true;
+        }
+    }
+    return false;
+}
 bool TreeBuilder::append_token_text(const Token& t) noexcept {
     if (t.text_len==0) return true;
-    return append_text(open_[depth_-1],t.text,t.text_len);
+    uint16_t parent=open_[depth_-1],before=NO;
+    // The HTML "in table text" insertion mode fosters non-whitespace
+    // character tokens. Whitespace stays with the table scaffold.
+    if(!whitespace_only(t.text,t.text_len))
+        foster_location(parent,before);
+    return append_text(parent,t.text,t.text_len,before);
 }
 bool TreeBuilder::append_comment(const Token& t) noexcept {
     const uint16_t parent=mode_==Mode::BeforeHtml ? 0 : open_[depth_-1];
@@ -224,7 +274,15 @@ bool TreeBuilder::start_body_tag(const Token& t) noexcept {
     if(equal(n,"tr"))close_open("tr");
     if(equal(n,"td")||equal(n,"th")) {close_open("td");close_open("th");}
     if(!ensure_table_context(n))return false;
-    const uint16_t id=create(NodeKind::Element,open_[depth_-1],n,&t,false);
+    uint16_t parent=open_[depth_-1], before=NO;
+    // Non-table children encountered directly in a table scaffold belong
+    // immediately before the table in its owner's child sequence.
+    const bool is_table_structure =
+        equal(n,"caption") || equal(n,"colgroup") || equal(n,"col") ||
+        equal(n,"tbody") || equal(n,"thead") || equal(n,"tfoot") ||
+        equal(n,"tr") || equal(n,"td") || equal(n,"th");
+    if(!is_table_structure)foster_location(parent,before);
+    const uint16_t id=create(NodeKind::Element,parent,n,&t,false,before);
     if(id==NO)return false;
     // In HTML, a self-closing slash on an ordinary (non-void) element is
     // ignored. A later foreign-content pass will implement SVG/MathML flags.
