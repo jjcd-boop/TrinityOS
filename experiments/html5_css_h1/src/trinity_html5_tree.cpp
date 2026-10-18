@@ -221,6 +221,16 @@ bool TreeBuilder::close_open(const char* name) noexcept {
     }
     return false;
 }
+bool TreeBuilder::close_open_in_table(const char* name) noexcept {
+    for(size_t i=depth_;i>1;--i) {
+        const char* current=nodes_[open_[i-1]].name;
+        // The first enclosing table is the boundary. A row or cell in an
+        // outer table is not in scope for the currently nested table.
+        if(equal(current,"table"))break;
+        if(equal(current,name)){depth_=i-1;return true;}
+    }
+    return false;
+}
 bool TreeBuilder::close_heading() noexcept {
     for(size_t i=depth_;i>1;--i)
         if(is_heading(nodes_[open_[i-1]].name)) { depth_=i-1;return true; }
@@ -271,8 +281,8 @@ bool TreeBuilder::start_body_tag(const Token& t) noexcept {
     else if(is_heading(n))close_heading();
     else if(equal(n,"a"))close_open("a");
     else if(is_block(n))close_open("p");
-    if(equal(n,"tr"))close_open("tr");
-    if(equal(n,"td")||equal(n,"th")) {close_open("td");close_open("th");}
+    if(equal(n,"tr"))close_open_in_table("tr");
+    if(equal(n,"td")||equal(n,"th")) {close_open_in_table("td");close_open_in_table("th");}
     if(!ensure_table_context(n))return false;
     uint16_t parent=open_[depth_-1], before=NO;
     // Non-table children encountered directly in a table scaffold belong
@@ -302,7 +312,10 @@ bool TreeBuilder::end_body_tag(const Token& t) noexcept {
             if(!start_body_tag(synthetic))return false;
         }
     }
-    close_open(t.name);
+    if(equal(t.name,"tr")||equal(t.name,"td")||equal(t.name,"th")||
+       equal(t.name,"tbody")||equal(t.name,"thead")||equal(t.name,"tfoot"))
+        close_open_in_table(t.name);
+    else close_open(t.name);
     return true;
 }
 bool TreeBuilder::in_body(const Token& t) noexcept {
