@@ -457,33 +457,49 @@ bool TreeBuilder::ensure_table_context(const char* name) noexcept {
 bool TreeBuilder::start_body_tag(const Token& t) noexcept {
     const char* n=t.name;
     if(equal(n,"html")||equal(n,"body")||equal(n,"head")) return true;
+    if(equal(n,"a") && active_last("a")>=0) {
+        // HTML does not permit nested active hyperlinks. Resolve the prior
+        // active anchor before starting the next anchor.
+        if(!adopt_formatting_end("a"))return false;
+    }
     if(equal(n,"p"))close_open("p");
     else if(equal(n,"li"))close_list_item("li");
     else if(equal(n,"dt")||equal(n,"dd"))close_list_item(n);
     else if(is_heading(n))close_heading();
-    else if(equal(n,"a"))close_open("a");
     else if(is_block(n))close_open("p");
-    if(equal(n,"tr"))close_open_in_table("tr");
-    if(equal(n,"td")||equal(n,"th")) {close_open_in_table("td");close_open_in_table("th");}
+    if(equal(n,"tr")) {
+        if(close_open_in_table("td")||close_open_in_table("th"))active_clear_marker();
+        close_open_in_table("tr");
+    }
+    if(equal(n,"td")||equal(n,"th")) {
+        if(close_open_in_table("td")||close_open_in_table("th"))active_clear_marker();
+    }
     if(!ensure_table_context(n))return false;
-    uint16_t parent=open_[depth_-1], before=NO;
-    // Non-table children encountered directly in a table scaffold belong
-    // immediately before the table in its owner's child sequence.
-    const bool is_table_structure =
+    const bool table_structure =
         equal(n,"caption") || equal(n,"colgroup") || equal(n,"col") ||
         equal(n,"tbody") || equal(n,"thead") || equal(n,"tfoot") ||
         equal(n,"tr") || equal(n,"td") || equal(n,"th");
-    if(!is_table_structure)foster_location(parent,before);
+    if(!table_structure && !is_block(n) && !reconstruct_formatting())
+        return false;
+    uint16_t parent=open_[depth_-1], before=NO;
+    if(!table_structure)foster_location(parent,before);
     const uint16_t id=create(NodeKind::Element,parent,n,&t,false,before);
     if(id==NO)return false;
-    // In HTML, a self-closing slash on an ordinary (non-void) element is
-    // ignored. A later foreign-content pass will implement SVG/MathML flags.
-    return is_void(n) ? true : push(id);
+    if(is_void(n))return true;
+    if(!push(id))return false;
+    if(is_formatting(n) && !active_add(id))return false;
+    if(equal(n,"td")||equal(n,"th")||equal(n,"caption")){
+        active_marker();
+        if(error_!=BuildError::None)return false;
+    }
+    // The slash on a normal HTML (non-void) element is ignored.
+    return true;
 }
 bool TreeBuilder::end_body_tag(const Token& t) noexcept {
     if(equal(t.name,"html")) { mode_=Mode::AfterBody; return true; }
     if(equal(t.name,"body")) { mode_=Mode::AfterBody;return true; }
     if(equal(t.name,"head"))return true;
+    if(is_formatting(t.name))return adopt_formatting_end(t.name);
     if(equal(t.name,"p")) {
         bool found=false;
         for(size_t i=depth_;i>1;--i)
@@ -494,14 +510,31 @@ bool TreeBuilder::end_body_tag(const Token& t) noexcept {
             if(!start_body_tag(synthetic))return false;
         }
     }
-    if(equal(t.name,"tr")||equal(t.name,"td")||equal(t.name,"th")||
-       equal(t.name,"tbody")||equal(t.name,"thead")||equal(t.name,"tfoot"))
+    if(equal(t.name,"tr")){
+        if(close_open_in_table("td")||close_open_in_table("th"))active_clear_marker();
+    }
+    if(equal(t.name,"td")||equal(t.name,"th")||equal(t.name,"caption")){
+        bool did=false;
+        if(equal(t.name,"caption"))did=close_open(t.name);
+        else did=close_open_in_table(t.name);
+        if(did)active_clear_marker();
+        return true;
+    }
+    if(equal(t.name,"tr")||equal(t.name,"tbody")||
+       equal(t.name,"thead")||equal(t.name,"tfoot"))
         close_open_in_table(t.name);
     else close_open(t.name);
     return true;
 }
 bool TreeBuilder::in_body(const Token& t) noexcept {
-    if(t.kind==Kind::Text)return append_token_text(t);
+    if(t.kind==Kind::Text){
+        // Reconstruct formatting elements after misnested closes, retaining
+        // the HTML active-formatting list across ordinary block boundaries.
+        uint16_t foster_parent=open_[depth_-1], before=NO;
+        if(!foster_location(foster_parent,before) && !reconstruct_formatting())
+            return false;
+        return append_token_text(t);
+    }
     if(t.kind==Kind::Comment)return append_comment(t);
     if(t.kind==Kind::StartTag)return start_body_tag(t);
     if(t.kind==Kind::EndTag)return end_body_tag(t);
