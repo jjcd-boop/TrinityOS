@@ -44,7 +44,11 @@ public:
     static constexpr uint16_t kMaxNodes = 384;
     static constexpr size_t kMaxDepth = 64;
     static constexpr size_t kMaxTokens = 16384;
+#ifndef TRINITY_HTML5_SEGMENTED_ONLY
     TreeBuilder() noexcept;
+#else
+    TreeBuilder() noexcept = delete;
+#endif
     // Caller owns the arena; keep it alive for the entire TreeBuilder lifetime.
     explicit TreeBuilder(SegmentedNodeArena& store) noexcept;
     bool segmented_mode() const noexcept { return nodes_.arena != nullptr; }
@@ -59,7 +63,9 @@ public:
 private:
     enum class Mode : uint8_t { BeforeHtml, BeforeHead, InHead, AfterHead, InBody, AfterBody };
     struct NodeAccess {
+#ifndef TRINITY_HTML5_SEGMENTED_ONLY
         TreeNode fixed[kMaxNodes]{};
+#endif
         SegmentedNodeArena* arena{nullptr};
         TreeNode& operator[](size_t index) noexcept;
         const TreeNode& operator[](size_t index) const noexcept;
