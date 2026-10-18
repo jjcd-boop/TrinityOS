@@ -43,7 +43,7 @@ int main() {
         BudgetAllocator alloc{};
         SegmentedNodeArena arena(adapter(alloc),4096,page*512);
         check(arena.error()==NodeArenaError::None,"valid arena configuration");
-        TreeNode original{};;
+        TreeNode original{};
         uint16_t first=TreeNode::None, handle=TreeNode::None;
         for(size_t i=0;i<2100;++i){
             TreeNode n{};n.text[0]=static_cast<char>('A'+(i%26));
