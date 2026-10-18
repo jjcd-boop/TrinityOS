@@ -60,7 +60,10 @@ bool TreeBuilder::is_block(const char* n) noexcept {
         equal(n,"p") || equal(n,"pre") || equal(n,"blockquote") ||
         equal(n,"table") || equal(n,"form") || equal(n,"hgroup") ||
         is_heading(n) || equal(n,"address") || equal(n,"figure") ||
-        equal(n,"figcaption") || equal(n,"hr") || equal(n,"details");
+        equal(n,"figcaption") || equal(n,"hr") || equal(n,"details") ||
+        equal(n,"center") || equal(n,"dir") || equal(n,"dialog") ||
+        equal(n,"fieldset") || equal(n,"menu") || equal(n,"search") ||
+        equal(n,"summary") || equal(n,"listing");
 }
 uint16_t TreeBuilder::previous_sibling(uint16_t parent, uint16_t before) const noexcept {
     if (parent>=count_) return NO;
