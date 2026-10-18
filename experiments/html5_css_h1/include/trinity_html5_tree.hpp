@@ -7,7 +7,7 @@ namespace trinity::html5 {
 
 enum class NodeKind : uint8_t { Document, Element, Text, Comment, Doctype };
 enum class BuildError : uint8_t {
-    None, NodeLimit, DepthLimit, AttributeLimit, TokenLimit, TokenOverflow, FormattingLimit
+    None, NodeLimit, DepthLimit, AttributeLimit, TokenLimit, TokenOverflow, FormattingLimit, MemoryBudget, AllocatorFailure
 };
 
 struct TreeAttribute {
@@ -34,27 +34,37 @@ struct TreeNode {
 // WHATWG tree builder (bounded adoption-agency repair, partial foster parenting, templates,
 // SVG/MathML namespaces or scripting-driven document.write).
 //
-// The large fixed node array belongs in an isolated service-owned allocation,
-// not on Trinity's desktop stack or in kernel/static executable pages.
+// Legacy fixed-node mode remains for existing tests. Production Ring-3 callers
+// may inject a segmented arena with explicit node/byte quotas.
+class SegmentedNodeArena;
 class TreeBuilder {
 public:
     static constexpr uint16_t kMaxNodes = 384;
     static constexpr size_t kMaxDepth = 64;
     static constexpr size_t kMaxTokens = 16384;
     TreeBuilder() noexcept;
+    // Caller owns the arena; keep it alive for the entire TreeBuilder lifetime.
+    explicit TreeBuilder(SegmentedNodeArena& store) noexcept;
+    bool segmented_mode() const noexcept { return nodes_.arena != nullptr; }
     bool build(const char* html, size_t bytes) noexcept;
     BuildError error() const noexcept { return error_; }
     size_t count() const noexcept { return count_; }
-    const TreeNode* get(uint16_t index) const noexcept {
-        return index < count_ ? &nodes_[index] : nullptr;
-    }
+    const TreeNode* get(uint16_t index) const noexcept;
     uint16_t html_index() const noexcept { return html_; }
     uint16_t head_index() const noexcept { return head_; }
     uint16_t body_index() const noexcept { return body_; }
     uint16_t first_named_child(uint16_t parent, const char* name) const noexcept;
 private:
     enum class Mode : uint8_t { BeforeHtml, BeforeHead, InHead, AfterHead, InBody, AfterBody };
-    TreeNode nodes_[kMaxNodes]{};
+    struct NodeAccess {
+        TreeNode fixed[kMaxNodes]{};
+        SegmentedNodeArena* arena{nullptr};
+        TreeNode& operator[](size_t index) noexcept;
+        const TreeNode& operator[](size_t index) const noexcept;
+    } nodes_{};
+    size_t node_limit() const noexcept;
+    bool allocate_node(uint16_t& index) noexcept;
+    BuildError arena_error() const noexcept;
     uint16_t open_[kMaxDepth]{};
     size_t count_{1}, depth_{1};
     // A compact active-formatting list. The sentinel is also used as a marker,
