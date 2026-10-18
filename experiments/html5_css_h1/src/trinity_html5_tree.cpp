@@ -61,7 +61,7 @@ bool TreeBuilder::is_block(const char* n) noexcept {
         equal(n,"table") || equal(n,"form") || equal(n,"hgroup") ||
         is_heading(n) || equal(n,"address") || equal(n,"figure") ||
         equal(n,"figcaption") || equal(n,"hr") || equal(n,"details") ||
-        equal(n,"center") || equal(n,"dir") || equal(n,"dialog") ||
+        equal(n,"center") || equal(n,"dir") ||
         equal(n,"fieldset") || equal(n,"menu") || equal(n,"search") ||
         equal(n,"summary") || equal(n,"listing");
 }
