@@ -1,0 +1,18 @@
+[package]
+name = "trinity_png_rows"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Standalone no_std PNG row reconstruction and bounded RGBA output for Trinity OS"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
