@@ -1,0 +1,93 @@
+#pragma once
+#include "trinity_html5_tokenizer.hpp"
+#include <stddef.h>
+#include <stdint.h>
+
+namespace trinity::html5 {
+
+enum class NodeKind : uint8_t { Document, Element, Text, Comment, Doctype };
+enum class BuildError : uint8_t {
+    None, NodeLimit, DepthLimit, AttributeLimit, TokenLimit, TokenOverflow
+};
+
+struct TreeAttribute {
+    char name[48]{};
+    char value[160]{};
+    bool has_value{false};
+};
+
+// One immutable parsed-tree node. Sibling indexes share storage with elements,
+// text, doctypes and comments. UINT16_MAX means "no node".
+struct TreeNode {
+    static constexpr uint16_t None = UINT16_MAX;
+    NodeKind kind{NodeKind::Element};
+    uint16_t parent{None}, first_child{None}, last_child{None}, next_sibling{None};
+    char name[48]{};
+    char text[256]{};
+    uint16_t text_len{0};
+    TreeAttribute attrs[6]{};
+    uint8_t attr_count{0};
+    bool implied{false};
+};
+
+// First bounded HTML5 tree-construction pass. This is NOT yet a complete
+// WHATWG tree builder (no adoption-agency, full foster parenting, templates,
+// SVG/MathML namespaces or scripting-driven document.write).
+//
+// The large fixed node array belongs in an isolated service-owned allocation,
+// not on Trinity's desktop stack or in kernel/static executable pages.
+class TreeBuilder {
+public:
+    static constexpr uint16_t kMaxNodes = 384;
+    static constexpr size_t kMaxDepth = 64;
+    static constexpr size_t kMaxTokens = 16384;
+    TreeBuilder() noexcept;
+    bool build(const char* html, size_t bytes) noexcept;
+    BuildError error() const noexcept { return error_; }
+    size_t count() const noexcept { return count_; }
+    const TreeNode* get(uint16_t index) const noexcept {
+        return index < count_ ? &nodes_[index] : nullptr;
+    }
+    uint16_t html_index() const noexcept { return html_; }
+    uint16_t head_index() const noexcept { return head_; }
+    uint16_t body_index() const noexcept { return body_; }
+    uint16_t first_named_child(uint16_t parent, const char* name) const noexcept;
+private:
+    enum class Mode : uint8_t { BeforeHtml, BeforeHead, InHead, AfterHead, InBody, AfterBody };
+    TreeNode nodes_[kMaxNodes]{};
+    uint16_t open_[kMaxDepth]{};
+    size_t count_{1}, depth_{1};
+    uint16_t html_{TreeNode::None};
+    uint16_t head_{TreeNode::None};
+    uint16_t body_{TreeNode::None};
+    Mode mode_{Mode::BeforeHtml};
+    BuildError error_{BuildError::None};
+
+    static bool equal(const char* lhs, const char* rhs) noexcept;
+    static bool whitespace_only(const char* text, size_t length) noexcept;
+    static void copy(char* dst, size_t capacity, const char* src, bool& overflow) noexcept;
+    static bool is_head_tag(const char* name) noexcept;
+    static bool is_void(const char* name) noexcept;
+    static bool is_block(const char* name) noexcept;
+    static bool is_heading(const char* name) noexcept;
+    uint16_t create(NodeKind kind, uint16_t parent, const char* name,
+                    const Token* attrs, bool implied) noexcept;
+    bool push(uint16_t index) noexcept;
+    bool enter_html(const Token* original) noexcept;
+    bool enter_head(const Token* original) noexcept;
+    bool finish_head() noexcept;
+    bool enter_body(const Token* original) noexcept;
+    bool append_text(uint16_t parent, const char* text, size_t length) noexcept;
+    bool append_token_text(const Token& t) noexcept;
+    bool handle(const Token& t) noexcept;
+    bool in_body(const Token& t) noexcept;
+    bool start_body_tag(const Token& t) noexcept;
+    bool end_body_tag(const Token& t) noexcept;
+    bool close_open(const char* name) noexcept;
+    bool close_heading() noexcept;
+    bool close_list_item(const char* name) noexcept;
+    bool ensure_table_context(const char* name) noexcept;
+    bool append_comment(const Token& t) noexcept;
+    void reset() noexcept;
+};
+}
