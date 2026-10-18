@@ -215,7 +215,8 @@ Token Tokenizer::tag(bool closing) noexcept {
             if (!name[j] && !t.name[j]) { is_raw=true; break; }
         }
         bool rcdata = false;
-        for (const char* name : {"title", "textarea"}) {
+        const char* rcdata_names[] = {"title", "textarea"};
+        for (const char* name : rcdata_names) {
             size_t j=0; while (name[j] && t.name[j]==name[j]) ++j;
             if (!name[j] && !t.name[j]) { rcdata=true; break; }
         }
