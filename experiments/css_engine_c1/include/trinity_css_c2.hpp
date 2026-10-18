@@ -71,14 +71,20 @@ enum class ResolveError : uint8_t {
 };
 class StyleResolver {
 public:
+    // Caller owns a reusable selector scratch buffer. Never put this
+    // potentially large SelectorList on a tiny Ring-3 GUI stack.
     StyleResolver(const trinity::html5::TreeBuilder& document,
-                  const trinity::css_c1::Stylesheet& sheet) noexcept
-        : document_(document),sheet_(sheet){}
+                  const trinity::css_c1::Stylesheet& sheet,
+                  SelectorList& scratch) noexcept
+        : document_(document),sheet_(sheet),scratch_(scratch){}
+    StyleResolver(const StyleResolver&)=delete;
+    StyleResolver& operator=(const StyleResolver&)=delete;
     bool compute(uint16_t node,ComputedStyle& output) noexcept;
     ResolveError error() const noexcept{return error_;}
 private:
     const trinity::html5::TreeBuilder& document_;
     const trinity::css_c1::Stylesheet& sheet_;
+    SelectorList& scratch_;
     ResolveError error_{ResolveError::None};
 };
 } // namespace trinity::css_c2
