@@ -215,42 +215,149 @@ bool TreeBuilder::move_children(uint16_t source,uint16_t target,uint16_t except)
     error_=BuildError::TokenLimit;
     return false;
 }
+int TreeBuilder::active_index(uint16_t node) const noexcept {
+    for(size_t i=0;i<active_count_;++i)
+        if(active_[i]==node)return static_cast<int>(i);
+    return -1;
+}
+void TreeBuilder::stack_remove(size_t position) noexcept {
+    if(position<2 || position>=depth_)return; // document and html never removed here
+    for(size_t i=position+1;i<depth_;++i)open_[i-1]=open_[i];
+    --depth_;
+}
+bool TreeBuilder::stack_insert(size_t position,uint16_t node) noexcept {
+    if(position<2 || position>depth_ || node>=count_ ||
+       depth_>=kMaxDepth){error_=BuildError::DepthLimit;return false;}
+    for(size_t i=depth_;i>position;--i)open_[i]=open_[i-1];
+    open_[position]=node;++depth_;
+    return true;
+}
+bool TreeBuilder::active_insert(size_t position,uint16_t node) noexcept {
+    if(position>active_count_ || node>=count_ ||
+       active_count_>=kFormattingLimit){
+        error_=BuildError::FormattingLimit;return false;
+    }
+    for(size_t i=active_count_;i>position;--i)active_[i]=active_[i-1];
+    active_[position]=node;++active_count_;
+    return true;
+}
+bool TreeBuilder::formatting_in_scope(size_t open_position) const noexcept {
+    // This is a deliberately narrow approximation of the HTML "in scope"
+    // predicate, including table-cell and template boundaries. The full
+    // namespace-aware scope boundary table is a subsequent conformance pass.
+    if(open_position<2 || open_position>=depth_)return false;
+    for(size_t i=depth_;i>open_position+1;--i){
+        const char* tag=nodes_[open_[i-1]].name;
+        if(equal(tag,"table") || equal(tag,"td") || equal(tag,"th") ||
+           equal(tag,"caption") || equal(tag,"template") ||
+           equal(tag,"select"))return false;
+    }
+    return true;
+}
 bool TreeBuilder::adopt_formatting_end(const char* name) noexcept {
-    const int slot=active_last(name);
-    if(slot<0){close_open(name);return true;}
-    const uint16_t fmt=active_[static_cast<size_t>(slot)];
-    size_t pos=0;
-    if(!on_open_stack(fmt,&pos)){
-        active_remove_at(static_cast<size_t>(slot));return true;
-    }
-    // The full algorithm handles complex intermediate formatting nodes,
-    // special element scopes, markers, and a bookmark. This first bounded
-    // implementation performs its no-furthest-block branch and direct-child
-    // furthest-block repair. Complex cases conservatively close the stack.
-    size_t furthest_pos=depth_;
-    for(size_t i=pos+1;i<depth_;++i){
-        if(is_special_block(nodes_[open_[i]].name)){furthest_pos=i;break;}
-    }
-    if(furthest_pos==depth_){
-        depth_=pos;
-        active_remove_at(static_cast<size_t>(slot));
+    // Adapted from WHATWG's adoption-agency *algorithmic requirements*, with
+    // bounded memory and no DOM sanitizers, foreign content, or script
+    // re-entrancy. This does not yet constitute a full HTML parser.
+    if(depth_>2 && equal(nodes_[open_[depth_-1]].name,name) &&
+       active_index(open_[depth_-1])<0){
+        --depth_;
         return true;
     }
-    const uint16_t furthest=open_[furthest_pos];
-    if(nodes_[furthest].parent!=fmt || pos+1!=furthest_pos){
-        depth_=pos;
-        active_remove_at(static_cast<size_t>(slot));
-        return true;
+    for(size_t outer=0;outer<8;++outer){
+        const int found=active_last(name);
+        if(found<0){close_open(name);return true;}
+        const uint16_t formatting=active_[static_cast<size_t>(found)];
+        size_t format_pos=0;
+        if(!on_open_stack(formatting,&format_pos)){
+            active_remove_at(static_cast<size_t>(found));
+            return true;
+        }
+        if(!formatting_in_scope(format_pos))return true;
+        size_t furthest_pos=depth_;
+        for(size_t i=format_pos+1;i<depth_;++i){
+            if(is_special_block(nodes_[open_[i]].name)){
+                furthest_pos=i;break;
+            }
+        }
+        if(furthest_pos==depth_){
+            depth_=format_pos;
+            active_remove_at(static_cast<size_t>(found));
+            return true;
+        }
+        const uint16_t furthest=open_[furthest_pos];
+        const uint16_t common=open_[format_pos-1];
+        uint16_t last_node=furthest;
+        uint16_t bookmark_after=NO;
+        // Inner loop traverses towards the formatting node. A node not in the
+        // active list is removed only from the stack, not from the DOM.
+        size_t inner=0;
+        for(size_t i=furthest_pos;i>format_pos+1;){
+            --i;++inner;
+            const uint16_t current=open_[i];
+            int active_slot=active_index(current);
+            if(inner>3 && active_slot>=0){
+                active_remove_at(static_cast<size_t>(active_slot));
+                active_slot=-1;
+            }
+            if(active_slot<0){
+                stack_remove(i);
+                --furthest_pos;
+                continue;
+            }
+            const uint16_t clone=clone_element(current,nodes_[current].parent);
+            if(clone==NO)return false;
+            active_[static_cast<size_t>(active_slot)]=clone;
+            open_[i]=clone;
+            if(bookmark_after==NO)bookmark_after=clone;
+            if(!relocate(last_node,clone,NO)){
+                error_=BuildError::TokenOverflow;return false;
+            }
+            last_node=clone;
+        }
+
+        uint16_t target=common,before=NO;
+        const char* common_tag=nodes_[common].name;
+        if(equal(common_tag,"table") || equal(common_tag,"tbody") ||
+           equal(common_tag,"thead") || equal(common_tag,"tfoot") ||
+           equal(common_tag,"tr")){
+            const uint16_t owner=nodes_[common].parent;
+            if(owner!=NO){target=owner;before=common;}
+        }
+        if(!relocate(last_node,target,before)){
+            error_=BuildError::TokenOverflow;return false;
+        }
+        const uint16_t replacement=clone_element(formatting,furthest);
+        if(replacement==NO || !move_children(furthest,replacement,replacement))
+            return false;
+
+        // The bookmark belongs immediately after the first intermediate
+        // formatting element copied by the inner loop, if one exists;
+        // otherwise it remains at the original formatting element position.
+        int current_format=active_index(formatting);
+        if(current_format<0){error_=BuildError::FormattingLimit;return false;}
+        size_t bookmark=static_cast<size_t>(current_format);
+        if(bookmark_after!=NO){
+            const int index=active_index(bookmark_after);
+            if(index<0){error_=BuildError::FormattingLimit;return false;}
+            bookmark=static_cast<size_t>(index)+1;
+        }
+        active_remove_at(static_cast<size_t>(current_format));
+        if(bookmark>static_cast<size_t>(current_format))--bookmark;
+        if(!active_insert(bookmark,replacement))return false;
+
+        // Drop the old formatter; insert the new formatter directly after
+        // furthestBlock in the open-elements stack. Retain all intervening
+        // nodes not explicitly removed by the algorithm.
+        stack_remove(format_pos);
+        size_t updated_furthest=0;
+        if(!on_open_stack(furthest,&updated_furthest)){
+            error_=BuildError::TokenOverflow;return false;
+        }
+        if(!stack_insert(updated_furthest+1,replacement))return false;
+        // The HTML algorithm can restart up to eight times for one end tag.
+        // Normally the next iteration finds no further special block and
+        // removes the replacement from the active list and open stack.
     }
-    const uint16_t parent=nodes_[fmt].parent;
-    const uint16_t before=nodes_[fmt].next_sibling;
-    if(!relocate(furthest,parent,before))return false;
-    const uint16_t clone=clone_element(fmt,furthest);
-    if(clone==NO || !move_children(furthest,clone,clone))return false;
-    // Continue parsing within the open furthest block; stale descendants
-    // are no longer current but other active formatting entries can rebuild.
-    depth_=pos;open_[depth_++]=furthest;
-    active_remove_at(static_cast<size_t>(slot));
     return true;
 }
 
