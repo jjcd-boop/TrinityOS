@@ -134,6 +134,57 @@ int main(){
         check(legacy.build(small.data(),small.size()),"legacy mode works after rejection");
         graph(legacy,2);
     }
+    {
+        // All old tests use the 384-node backend. Check that injecting a
+        // segmented arena doesn't change DOM semantics for common HTML.
+        static Alloc alloc{};
+        static SegmentedNodeArena storage(callbacks(alloc),300,
+                                           page*40);
+        static TreeBuilder dynamic(storage);
+        static TreeBuilder fixed;
+        const char* cases[]={
+            "<!doctype html><h1>hello</h1><p>world",
+            "<div><b>one</b><i>two</i></div>",
+            "<p><b>1<i>2</b>3</i>4",
+            "<table><tr><td>one<td>two</table>",
+            "<table><b><tr><td>A</td></tr>B</table>C",
+            "<table><caption><b>Title</b><tr><td>X</td></tr></table>",
+            "<table><tr><td><b>A<table><tr><td>B</b>C</td></tr></table></td></tr></table>",
+            "<ul><li>one<li>two<li>three",
+            "<script>x < y</script><p>text &amp; more</p>",
+            "<div class=first class=second><img src=x>tail</div>"
+        };
+        for(const char* sample:cases){
+            const size_t bytes=std::strlen(sample);
+            const bool old_ok=fixed.build(sample,bytes);
+            const bool new_ok=dynamic.build(sample,bytes);
+            check(old_ok==new_ok && fixed.error()==dynamic.error(),
+                  "legacy and segmented parse result parity");
+            if(!old_ok || !new_ok)continue;
+            check(fixed.count()==dynamic.count(),
+                  "segmented and legacy node counts identical");
+            if(fixed.count()!=dynamic.count())continue;
+            for(size_t i=0;i<fixed.count();++i){
+                const uint16_t id=static_cast<uint16_t>(i);
+                const TreeNode *a=fixed.get(id), *b=dynamic.get(id);
+                check(a && b && a->kind==b->kind && a->parent==b->parent &&
+                      a->first_child==b->first_child &&
+                      a->last_child==b->last_child &&
+                      a->next_sibling==b->next_sibling &&
+                      a->text_len==b->text_len && a->attr_count==b->attr_count &&
+                      a->implied==b->implied &&
+                      std::strcmp(a->name,b->name)==0 &&
+                      std::strcmp(a->text,b->text)==0,
+                      "segmented DOM preserves node structure and values");
+                if(!a || !b)continue;
+                for(uint8_t j=0;j<a->attr_count && j<b->attr_count;++j)
+                    check(std::strcmp(a->attrs[j].name,b->attrs[j].name)==0 &&
+                          std::strcmp(a->attrs[j].value,b->attrs[j].value)==0 &&
+                          a->attrs[j].has_value==b->attrs[j].has_value,
+                          "segmented DOM preserves attributes");
+            }
+        }
+    }
     if(failures){std::printf("FAIL H3C4 live DOM segmented migration (%d)\n",failures);return 1;}
     std::puts("PASS H3C4 live TreeBuilder 2605 nodes, node/byte/OOM quotas, rebuild, legacy");
     return 0;
