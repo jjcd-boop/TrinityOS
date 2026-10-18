@@ -681,6 +681,13 @@ bool TreeBuilder::ensure_table_context(const char* name) noexcept {
 bool TreeBuilder::start_body_tag(const Token& t) noexcept {
     const char* n=t.name;
     if(equal(n,"html")||equal(n,"body")||equal(n,"head")) return true;
+    // A caption is a special table insertion mode. A new table structure
+    // token first closes the caption in its own innermost table scope.
+    if(equal(n,"caption") || equal(n,"colgroup") || equal(n,"col") ||
+       equal(n,"tbody") || equal(n,"thead") || equal(n,"tfoot") ||
+       equal(n,"tr") || equal(n,"td") || equal(n,"th")){
+        close_caption_context();
+    }
     if(equal(n,"a") && active_last("a")>=0) {
         // HTML does not permit nested active hyperlinks. Resolve the prior
         // active anchor before starting the next anchor.
@@ -699,6 +706,14 @@ bool TreeBuilder::start_body_tag(const Token& t) noexcept {
         if(close_open_in_table("td")||close_open_in_table("th"))active_clear_marker();
     }
     if(!ensure_table_context(n))return false;
+    if(equal(n,"col") && table_text_context() &&
+       equal(nodes_[open_[depth_-1]].name,"table")){
+        // The "in table" <col> rule implies a colgroup before reprocessing
+        // the col token. The actual column element remains void.
+        const uint16_t group=create(NodeKind::Element,open_[depth_-1],
+                                    "colgroup",nullptr,true);
+        if(!push(group))return false;
+    }
     const bool table_structure =
         equal(n,"caption") || equal(n,"colgroup") || equal(n,"col") ||
         equal(n,"tbody") || equal(n,"thead") || equal(n,"tfoot") ||
@@ -720,6 +735,7 @@ bool TreeBuilder::start_body_tag(const Token& t) noexcept {
     return true;
 }
 bool TreeBuilder::end_body_tag(const Token& t) noexcept {
+    if(equal(t.name,"table"))close_caption_context();
     if(equal(t.name,"html")) { mode_=Mode::AfterBody; return true; }
     if(equal(t.name,"body")) { mode_=Mode::AfterBody;return true; }
     if(equal(t.name,"head"))return true;
@@ -737,15 +753,17 @@ bool TreeBuilder::end_body_tag(const Token& t) noexcept {
     if(equal(t.name,"tr")){
         if(close_open_in_table("td")||close_open_in_table("th"))active_clear_marker();
     }
-    if(equal(t.name,"td")||equal(t.name,"th")||equal(t.name,"caption")){
-        bool did=false;
-        if(equal(t.name,"caption"))did=close_open(t.name);
-        else did=close_open_in_table(t.name);
-        if(did)active_clear_marker();
+    if(equal(t.name,"caption")) {
+        close_caption_context();
+        return true;
+    }
+    if(equal(t.name,"td")||equal(t.name,"th")){
+        if(close_open_in_table(t.name))active_clear_marker();
         return true;
     }
     if(equal(t.name,"tr")||equal(t.name,"tbody")||
-       equal(t.name,"thead")||equal(t.name,"tfoot"))
+       equal(t.name,"thead")||equal(t.name,"tfoot")||
+       equal(t.name,"colgroup"))
         close_open_in_table(t.name);
     else close_open(t.name);
     return true;
@@ -770,10 +788,14 @@ bool TreeBuilder::in_body(const Token& t) noexcept {
 bool TreeBuilder::handle(const Token& t) noexcept {
     if(t.overflow) { error_=BuildError::TokenOverflow;return false; }
     if(t.kind==Kind::Doctype){
+        if(!flush_table_text())return false;
         const uint16_t id=create(NodeKind::Doctype,0,t.name,nullptr,false);
         return id!=NO;
     }
-    if(t.kind==Kind::Comment) return append_comment(t);
+    if(t.kind==Kind::Comment) {
+        if(!flush_table_text())return false;
+        return append_comment(t);
+    }
     // A token may be reprocessed when an implied html/head/body is created.
     // Each transition advances the mode; no recursion or heap allocations.
     for(unsigned retry=0;retry<6;++retry) {
