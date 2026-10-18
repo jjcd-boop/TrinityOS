@@ -57,18 +57,18 @@ cases = [
     ("formatting and special div", "<em><i><div>A</em>B</i>C</div>", True),
     ("formatting nolog", "<nobr><b>A<div>B</nobr>C</div>", True),
     ("misnested form", "<b><form><i>A</b>B</i></form>", True),
-    ("H3C2 pending mixed text", "<table>  \n A<tr><td>B</td></tr></table>", False),
-    ("H3C2 pending pure whitespace", "<table> \n <tr><td>B</td></tr></table>", False),
-    ("H3C2 comment flush", "<table>hello<!--comment--><tr><td>X</td></tr></table>", False),
-    ("H3C2 caption before row", "<table><caption><b>Title</b><tr><td>A</td></tr></table>", False),
-    ("H3C2 caption closes with table", "<table><caption>A</table>B", False),
-    ("H3C2 implied colgroup", "<table><col><col><tr><td>A</td></tr></table>", False),
-    ("H3C2 explicit colgroup", "<table><colgroup><col></colgroup><tr><td>A</td></tr></table>", False),
-    ("H3C2 head to body transition", "<table><thead><tr><th>A<tbody><tr><td>B</table>", False),
-    ("H3C2 omitted cell close", "<table><tr><td>A<td>B</tr></table>", False),
-    ("H3C2 caption with block", "<table><caption><p>Hello</p></caption><tr><td>A</td></tr></table>", False),
-    ("H3C2 two table text segments", "<table>A<tr><td>B</td></tr>C</table>", False),
-    ("H3C2 table whitespace and formatting", "<table> <b>X</b> </table>", False),
+    ("H3C2 pending mixed text", "<table>  \n A<tr><td>B</td></tr></table>", True),
+    ("H3C2 pending pure whitespace", "<table> \n <tr><td>B</td></tr></table>", True),
+    ("H3C2 comment flush", "<table>hello<!--comment--><tr><td>X</td></tr></table>", True),
+    ("H3C2 caption before row", "<table><caption><b>Title</b><tr><td>A</td></tr></table>", True),
+    ("H3C2 caption closes with table", "<table><caption>A</table>B", True),
+    ("H3C2 implied colgroup", "<table><col><col><tr><td>A</td></tr></table>", True),
+    ("H3C2 explicit colgroup", "<table><colgroup><col></colgroup><tr><td>A</td></tr></table>", True),
+    ("H3C2 head to body transition", "<table><thead><tr><th>A<tbody><tr><td>B</table>", True),
+    ("H3C2 omitted cell close", "<table><tr><td>A<td>B</tr></table>", True),
+    ("H3C2 caption with block", "<table><caption><p>Hello</p></caption><tr><td>A</td></tr></table>", True),
+    ("H3C2 two table text segments", "<table>A<tr><td>B</td></tr>C</table>", True),
+    ("H3C2 table whitespace and formatting", "<table> <b>X</b> </table>", True),
 
 
 ]
@@ -88,5 +88,5 @@ for label,html,required in cases:
             required_bad += 1
     else:
         print(f"MATCH: {label}")
-print(f"H3B2 html5lib differential: {len(cases)-differences}/{len(cases)} match; {required_bad} required mismatches")
+print(f"Trinity HTML5 tree html5lib differential: {len(cases)-differences}/{len(cases)} match; {required_bad} required mismatches")
 sys.exit(1 if required_bad else 0)
