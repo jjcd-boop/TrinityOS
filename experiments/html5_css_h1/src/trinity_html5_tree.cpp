@@ -1,20 +1,81 @@
 #include "trinity_html5_tree.hpp"
+#include "trinity_html5_segmented_nodes.hpp"
 
 namespace trinity::html5 {
 static constexpr uint16_t NO = TreeNode::None;
 
-TreeBuilder::TreeBuilder() noexcept { reset(); }
+TreeNode& TreeBuilder::NodeAccess::operator[](size_t i) noexcept {
+    // All caller indices are validated against TreeBuilder::count_ before use.
+    return arena ? *arena->get(static_cast<uint16_t>(i)) : fixed[i];
+}
+const TreeNode& TreeBuilder::NodeAccess::operator[](size_t i) const noexcept {
+    return arena ? *arena->get(static_cast<uint16_t>(i)) : fixed[i];
+}
 
+TreeBuilder::TreeBuilder() noexcept { reset(); }
+TreeBuilder::TreeBuilder(SegmentedNodeArena& storage) noexcept {
+    nodes_.arena=&storage;
+    reset();
+}
+
+const TreeNode* TreeBuilder::get(uint16_t i) const noexcept {
+    if(i>=count_)return nullptr;
+    return nodes_.arena ? nodes_.arena->get(i) : &nodes_.fixed[i];
+}
+size_t TreeBuilder::node_limit() const noexcept {
+    return nodes_.arena ? nodes_.arena->node_budget() : kMaxNodes;
+}
+BuildError TreeBuilder::arena_error() const noexcept {
+    if(!nodes_.arena)return BuildError::NodeLimit;
+    switch(nodes_.arena->error()) {
+        case NodeArenaError::AllocatorFailure: return BuildError::AllocatorFailure;
+        case NodeArenaError::BadConfiguration:
+        case NodeArenaError::ByteBudget: return BuildError::MemoryBudget;
+        case NodeArenaError::NodeBudget: return BuildError::NodeLimit;
+        case NodeArenaError::None: return BuildError::MemoryBudget;
+    }
+    return BuildError::MemoryBudget;
+}
+bool TreeBuilder::allocate_node(uint16_t& index) noexcept {
+    index=NO;
+    if(count_>=node_limit() || count_>=TreeNode::None) {
+        error_=BuildError::NodeLimit;
+        return false;
+    }
+    if(nodes_.arena) {
+        uint16_t actual=NO;
+        if(!nodes_.arena->append(TreeNode{},actual)){
+            error_=arena_error();
+            return false;
+        }
+        if(actual!=count_){
+            error_=BuildError::MemoryBudget;
+            return false;
+        }
+    }
+    index=static_cast<uint16_t>(count_++);
+    return true;
+}
 void TreeBuilder::reset() noexcept {
-    count_ = 1; depth_ = 1; open_[0] = 0;
-    nodes_[0] = TreeNode{};
-    nodes_[0].kind = NodeKind::Document;
-    html_ = head_ = body_ = NO;
-    mode_ = Mode::BeforeHtml;
+    count_=0;
+    depth_=1;open_[0]=0;
+    html_=head_=body_=NO;
+    mode_=Mode::BeforeHtml;
     active_count_=0;
     pending_table_len_=0;
     pending_table_active_=false;
-    error_ = BuildError::None;
+    error_=BuildError::None;
+    if(nodes_.arena) {
+        nodes_.arena->clear();
+        uint16_t root=NO;
+        if(!nodes_.arena->append(TreeNode{},root) || root!=0) {
+            error_=arena_error();
+            return;
+        }
+    }
+    count_=1;
+    nodes_[0]=TreeNode{};
+    nodes_[0].kind=NodeKind::Document;
 }
 bool TreeBuilder::equal(const char* a, const char* b) noexcept {
     if (!a || !b) return false;
@@ -383,7 +444,7 @@ bool TreeBuilder::adopt_formatting_end(const char* name) noexcept {
 
 uint16_t TreeBuilder::create(NodeKind kind, uint16_t parent, const char* name,
                              const Token* token, bool implied, uint16_t before) noexcept {
-    if (count_ >= kMaxNodes || parent >= count_) {
+    if (count_ >= node_limit() || parent >= count_) {
         error_ = BuildError::NodeLimit; return NO;
     }
     if (before!=NO && (before>=count_ || nodes_[before].parent!=parent)) {
@@ -393,7 +454,8 @@ uint16_t TreeBuilder::create(NodeKind kind, uint16_t parent, const char* name,
         error_ = BuildError::AttributeLimit; return NO;
     }
     const uint16_t predecessor=previous_sibling(parent,before);
-    const uint16_t index = static_cast<uint16_t>(count_++);
+    uint16_t index=NO;
+    if(!allocate_node(index))return NO;
     TreeNode& n = nodes_[index]; n = TreeNode{};
     n.kind = kind; n.parent = parent; n.implied = implied;
     bool overflow = false;
@@ -853,6 +915,7 @@ bool TreeBuilder::handle(const Token& t) noexcept {
 }
 bool TreeBuilder::build(const char* source,size_t length) noexcept {
     reset();
+    if(error_!=BuildError::None)return false;
     if(!source && length){error_=BuildError::TokenOverflow;return false;}
     Tokenizer tok(source,length);
     for(size_t i=0;i<kMaxTokens;++i) {
