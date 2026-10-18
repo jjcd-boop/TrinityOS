@@ -34,8 +34,10 @@ struct TreeNode {
 // WHATWG tree builder (bounded adoption-agency repair, partial foster parenting, templates,
 // SVG/MathML namespaces or scripting-driven document.write).
 //
-// Legacy fixed-node mode remains for existing tests. Production Ring-3 callers
-// may inject a segmented arena with explicit node/byte quotas.
+// Legacy fixed-node mode remains for existing tests. Ring-3 callers may
+// inject a segmented arena with explicit node/byte quotas. In H3C4, the
+// inline fixed fallback still occupies TreeBuilder memory even in segmented
+// mode; physical footprint reduction is a separate follow-up pass.
 class SegmentedNodeArena;
 class TreeBuilder {
 public:
