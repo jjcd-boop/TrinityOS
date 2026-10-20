@@ -1,0 +1,185 @@
+From e3193bd6717685d602eb494f87bac4ded376716e Mon Sep 17 00:00:00 2001
+From: Trinity Phase9E Local <phase9e@local.invalid>
+Date: Fri, 16 Oct 2026 17:19:13 +0000
+Subject: [PATCH 01/12] AppCompat: specify multi-backend exFAT mount routing
+
+---
+ ...ity-appcompat-exfat-mount-router-design.md | 167 ++++++++++++++++++
+ 1 file changed, 167 insertions(+)
+ create mode 100644 docs/superpowers/specs/2026-10-16-trinity-appcompat-exfat-mount-router-design.md
+
+diff --git a/docs/superpowers/specs/2026-10-16-trinity-appcompat-exfat-mount-router-design.md b/docs/superpowers/specs/2026-10-16-trinity-appcompat-exfat-mount-router-design.md
+new file mode 100644
+index 0000000..64d1d56
+--- /dev/null
++++ b/docs/superpowers/specs/2026-10-16-trinity-appcompat-exfat-mount-router-design.md
+@@ -0,0 +1,167 @@
++# Trinity AppCompat exFAT Mount Router Design
++
++## Intent
++
++Prepare every Trinity application/component that can persist user-created or user-selected data to work through the same backend-neutral VFS/FSSVC path when writable exFAT becomes physically admitted. This work is allowed before the Phase 9E sacrificial-media hardware PASS only because all exFAT mutation is exercised against simulated/file-backed media; the production physical removable-media write path remains gated exactly as Phase 9E defines.
++
++Success means that save-capable applications do not know whether a path is backed by TrinityFS or exFAT, TFS remains mounted as the OS root, a second writable exFAT backend can be mounted simultaneously under `/Volumes/<label>/` in simulation, and the full application persistence matrix passes without enabling physical exFAT writes.
++
++## Existing State
++
++Trinity already has most of the required lower layers:
++
++- `live::Service` can represent either `FilesystemKind::TrinityFs` or `FilesystemKind::ExFat`.
++- `fs_service::Endpoint` currently admits exactly one `live::Service* backend` and dispatches every request to it.
++- VFS2 already contains a private mount namespace (`vfs_mount_namespace`) and trusted mount-target registry (`vfs_mount_targets`) with longest-prefix resolution and ABA-safe target binding.
++- Existing application save clients call backend-neutral FSSVC/VFS operations such as save, read, enumerate, mkdir, rename, and remove.
++- Phase 9E software qualification has a physically fail-closed USB writer except in the dedicated sacrificial-sector qualification build.
++
++The missing integration is therefore not an exFAT API in each application. It is routing one FSSVC namespace across more than one already-admitted `live::Service` backend.
++
++## Persistence Inventory
++
++The compatibility matrix MUST include every current user-facing component with durable user-data behavior discovered in source, not only office applications. At minimum this includes:
++
++- Writer — create/save/reopen/overwrite and Save As destinations.
++- Sheets — create/save/reopen/overwrite, including multi-cluster files.
++- Slides — create/save/reopen/overwrite and Save As destinations.
++- Draw — image/project export/save paths.
++- Forge — project files, generated/exported artifacts, package/registry/recovery persistence where routed through FSSVC.
++- Browser — Save Page plus bookmarks/localStorage/persistent-cookie/profile persistence that is file-backed.
++- Calculator — user export path.
++- File Explorer — create directory, copy/extract, rename, remove/trash and cross-mount copy where supported by the client flow.
++
++System settings/Desktop preferences are system-state persistence and remain on the OS/root backend unless separately redesigned. Notes is currently RAM-only and therefore is not falsely counted as exFAT-compatible persistence; adding Notes save is a separate application feature. Media/Photo readers remain read-only unless a write/export path is found by the machine-checked inventory. If any additional save-capable component is found later, it MUST be added to the same compatibility matrix before this pass can seal.
++
++## Namespace Architecture
++
++### Root mount
++
++TrinityFS remains mounted at `/`. Existing logical OS paths such as `/Documents`, `/Desktop`, `/Downloads`, application profile paths, and system-state paths continue resolving to the TrinityFS root unless an explicit nested mount overrides them.
++
++### External mounts
++
++Writable simulated exFAT volumes are mounted under:
++
++`/Volumes/<label>/`
++
++`<label>` is service-qualified and normalized before namespace attachment. Applications never construct a raw device/partition path and never receive block authority.
++
++### Router
++
++Add a service-local FSSVC router that combines:
++
++1. the existing `vfs2::mounts::Table`;
++2. the existing `vfs2::mount_targets::Registry`;
++3. a bounded table mapping trusted target IDs to already-admitted `live::Service*` backends.
++
++The router does not parse filesystems, issue block I/O, or create write authority. It only resolves an absolute VFS path to an existing trusted backend plus a normalized backend-relative path.
++
++The root TFS backend is registered as the namespace root target. Each simulated exFAT backend is registered as another trusted target and attached below `/Volumes/<label>`.
++
++The router MUST fail closed when:
++
++- a target is revoked;
++- a mount-to-target binding is stale;
++- a target has no live backend slot;
++- backend service epoch/lifecycle is stale;
++- a resolved relative path cannot be normalized;
++- two-path operations resolve to different mounts when the underlying operation requires same-filesystem atomic rename semantics.
++
++## FSSVC Dispatch
++
++`fs_service::Endpoint` remains the client-facing IPC/capability boundary. It gains an optional router binding while preserving source compatibility for existing single-backend tests and callers.
++
++For path-based operations (`Open`, `Read`, `Enumerate`, `Write`, `Create`, `Delete`, `Rename`):
++
++1. parse and copy the shared-memory payload exactly as today;
++2. resolve each absolute path through the router;
++3. construct a session from the endpoint's granted rights, but use the resolved backend's current service epoch/lifecycle as an additional validity fence;
++4. dispatch to `live::*` using the backend-relative path;
++5. never expose the selected backend or device identity to the application protocol.
++
++For `Rename`, source and destination MUST resolve to the same target. Cross-mount rename returns a deterministic non-success result; File Explorer may implement cross-mount move later as copy-then-delete, but the filesystem service must not fake atomicity across filesystems.
++
++`Diagnostic` remains root-TFS-only unless a later design defines per-mount diagnostics.
++
++## Handle Identity
++
++The current live handle table keys by backend-local object ID plus an identity guard. With multiple mounted filesystems, equal object IDs can occur on different backends. Therefore opened-handle identity MUST incorporate the resolved mount/target identity.
++
++The preferred design is to extend the handle entry's neutral identity guard to include a stable nonzero mount/target discriminator for every backend, not only exFAT path guards. This preserves the existing public `ObjectHandle` ABI while preventing object-ID collision or stale-handle acceptance across mounts.
++
++Closing a handle remains local to the FSSVC handle table. Any operation that validates a handle against a live object MUST validate the same mount/target discriminator that was captured at open.
++
++## Application Contract
++
++Applications continue to use the same FSSVC/VFS APIs. No `exfat_*` syscall, no filesystem-type branch, and no removable-media block API is added to Writer, Sheets, Slides, Draw, Forge, Browser, Calculator, or File Explorer.
++
++Save As-capable applications may choose paths beneath `/Volumes/<label>/...`. Fixed logical persistence such as Browser profile state stays on its existing logical OS path unless the user explicitly exports to an external volume.
++
++UI/status strings MUST describe durability generically (for example `Saved`, `Committed`, or `Save complete`) rather than asserting `TFS` when the application did not choose or inspect a filesystem type.
++
++## Simulated exFAT Compatibility Environment
++
++Before hardware qualification, all writable exFAT application tests use a RAM-backed or file-backed bounded block device admitted as a writable `live::Service` with `FilesystemKind::ExFat`.
++
++The test environment simultaneously mounts:
++
++- writable TrinityFS at `/`;
++- writable simulated exFAT at `/Volumes/TESTEXFAT`.
++
++The test MUST prove both backends remain independently readable/writable and routing one path cannot mutate the other backend.
++
++No test in this pass may arm the Phase 9E physical qualification writer, open a physical removable writable transport, or alter the Phase 9E sacrificial-sector hardware gate.
++
++## Application Qualification Matrix
++
++The final compatibility campaign must exercise, as applicable to each component:
++
++- create/save;
++- reopen/readback;
++- overwrite/replace;
++- Save As to `/Volumes/TESTEXFAT/...`;
++- multi-cluster payloads;
++- Unicode and ordinary extension-bearing filenames;
++- nested directories;
++- flush/write failure propagation;
++- `DurabilityUnknown` propagation without falsely reporting success;
++- mount removal/revocation while the app has pending or stale state;
++- cross-session reopen;
++- no TFS-specific application code path required for successful operation.
++
++File Explorer additionally covers enumerate, mkdir, copy/extract, rename, remove/trash semantics supported by the backend. Cross-mount rename must be rejected by FSSVC; any copy-based move behavior is client-level and must preserve the source until the destination write is durably committed.
++
++## Safety Boundary
++
++This pass MUST NOT change the Phase 9E physical-write qualification rule.
++
++Until the real sacrificial-media Phase 9E PASS is supplied and 9E is hardware-qualified:
++
++- normal Trinity physical exFAT mutation remains disabled;
++- the special 9E writer remains exact-LBA/two-write/two-flush constrained;
++- AppCompat tests use simulated/file-backed exFAT only;
++- no production application can acquire physical exFAT write authority;
++- Phase 9F/9G hardware mutation admission remains blocked.
++
++## Compatibility and Scope Constraints
++
++- Do not alter AX200/Wi-Fi, Baofeng/amateur-radio, FunctionGemma/AI, audio, GPU, scheduler/SMP, or unrelated GUI architecture.
++- Preserve the existing FSSVC client protocol and syscall surface unless a test proves that an ABI change is unavoidable; prefer internal service routing.
++- Preserve existing single-backend `fs_service::admit()` behavior for current callers and regression tests.
++- Reuse `vfs_mount_namespace` and `vfs_mount_targets`; do not create a parallel mount system.
++- Keep tables bounded and allocation-free in the freestanding service path.
++- Do not silently redirect logical OS paths to exFAT. External-volume use is explicit through `/Volumes/...`.
++
++## Seal Criteria
++
++This AppCompat pass is complete only when:
++
++1. a machine-checked persistence inventory covers every current save-capable application/component;
++2. TFS `/` and simulated exFAT `/Volumes/TESTEXFAT` operate simultaneously through one FSSVC endpoint/router;
++3. stale/revoked mount targets and backend lifecycle failures fail closed;
++4. handle identity cannot collide across mounts;
++5. every save-capable application has its applicable persistence matrix exercised against the routed simulated exFAT backend or is explicitly classified as fixed-root system-state persistence;
++6. TFS-specific user-facing save assumptions are removed from applications that may save to either backend;
++7. inherited filesystem, FSSVC, Phase 9D, and Phase 9E software safety regressions remain green;
++8. physical removable-media exFAT writes remain impossible outside the dedicated Phase 9E qualification path.
+-- 
+2.47.3
